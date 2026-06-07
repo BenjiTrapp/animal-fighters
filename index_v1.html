@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Animal Fighter II</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = 800;
+canvas.height = 500;
+
+// Game states
+const STATE = { INTRO: 0, SELECT: 1, FIGHT: 2, ROUND_END: 3, GAME_OVER: 4 };
+let gameState = STATE.INTRO;
+let introTimer = 0;
+let selectCursor = 0;
+let selectedPlayer = -1;
+let selectedEnemy = -1;
+
+// Audio context
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+function playSound(freq, duration, type='square', vol=0.15) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.value = vol;
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+}
+function playHit() { playSound(150, 0.15, 'sawtooth', 0.2); }
+function playBlock() { playSound(300, 0.08, 'square', 0.1); }
+function playSelect() { playSound(440, 0.1, 'square', 0.15); }
+function playConfirm() { playSound(660, 0.15, 'square', 0.15); setTimeout(()=>playSound(880,0.2,'square',0.15), 100); }
+function playRound() { playSound(330,0.2,'triangle',0.2); setTimeout(()=>playSound(440,0.2,'triangle',0.2),200); setTimeout(()=>playSound(550,0.3,'triangle',0.2),400); }
+
+// Characters data
+const CHARACTERS = [
+  {
+    name: 'JUDO PANDA',
+    color: '#ffffff',
+    accent: '#333333',
+    eye: '#000000',
+    style: 'Balanced fighter with powerful throws',
+    speed: 4,
+    jumpForce: 14,
+    damage: { lowKick: 6, highKick: 9, lowPunch: 5, highPunch: 10 },
+    health: 100
+  },
+  {
+    name: 'NINJA RACCOON',
+    color: '#888888',
+    accent: '#444444',
+    eye: '#00ff00',
+    style: 'Fast and agile with quick combos',
+    speed: 5.5,
+    jumpForce: 16,
+    damage: { lowKick: 5, highKick: 7, lowPunch: 4, highPunch: 8 },
+    health: 90
+  },
+  {
+    name: 'KARATE DOG',
+    color: '#cc8844',
+    accent: '#885522',
+    eye: '#000000',
+    style: 'Strong strikes with great reach',
+    speed: 3.5,
+    jumpForce: 13,
+    damage: { lowKick: 7, highKick: 11, lowPunch: 6, highPunch: 12 },
+    health: 110
+  }
+];
+
+// Fighter class
+class Fighter {
+  constructor(charIdx, x, facing, isAI=false) {
+    const ch = CHARACTERS[charIdx];
+    this.charIdx = charIdx;
+    this.name = ch.name;
+    this.x = x;
+    this.y = 340;
+    this.groundY = 340;
+    this.width = 60;
+    this.height = 100;
+    this.facing = facing; // 1 = right, -1 = left
+    this.velX = 0;
+    this.velY = 0;
+    this.speed = ch.speed;
+    this.jumpForce = ch.jumpForce;
+    this.maxHealth = ch.health;
+    this.health = ch.health;
+    this.damage = ch.damage;
+    this.color = ch.color;
+    this.accent = ch.accent;
+    this.eye = ch.eye;
+    this.isAI = isAI;
+    this.state = 'idle'; // idle, walk, jump, crouch, attack, hit, ko
+    this.attackType = '';
+    this.attackTimer = 0;
+    this.attackDuration = 20;
+    this.hitTimer = 0;
+    this.comboCount = 0;
+    this.comboTimer = 0;
+    this.isJumping = false;
+    this.isCrouching = false;
+    this.animFrame = 0;
+    this.animTimer = 0;
+    this.wins = 0;
+    this.hasHit = false;
+    // AI
+    this.aiTimer = 0;
+    this.aiAction = '';
+    this.aiReactTime = 30 + Math.random() * 20;
+  }
+
+  getHitbox() {
+    let h = this.isCrouching ? 60 : this.height;
+    let y = this.isCrouching ? this.y + 40 : this.y;
+    return { x: this.x - 25, y: y, w: 50, h: h };
+  }
+
+  getAttackBox() {
+    if (this.attackTimer <= 0) return null;
+    let ax = this.facing === 1 ? this.x + 25 : this.x - 65;
+    let ay = this.y + 20;
+    if (this.attackType === 'lowKick' || this.attackType === 'lowPunch') ay = this.y + 60;
+    if (this.attackType === 'highKick' || this.attackType === 'highPunch') ay = this.y + 10;
+    if (this.isCrouching) ay += 40;
+    return { x: ax, y: ay, w: 40, h: 30 };
+  }
+
+  attack(type) {
+    if (this.attackTimer > 0 || this.hitTimer > 0 || this.state === 'ko') return;
+    this.attackType = type;
+    this.attackTimer = this.attackDuration;
+    this.hasHit = false;
+    this.state = 'attack';
+    playSound(200 + Math.random()*100, 0.05, 'sawtooth', 0.1);
+  }
+
+  jump() {
+    if (!this.isJumping && this.state !== 'ko') {
+      this.isJumping = true;
+      this.velY = -this.jumpForce;
+      playSound(300, 0.08, 'triangle', 0.08);
+    }
+  }
+
+  takeHit(dmg) {
+    this.health -= dmg;
+    this.hitTimer = 15;
+    this.state = 'hit';
+    this.velX = -this.facing * 3;
+    if (this.health <= 0) {
+      this.health = 0;
+      this.state = 'ko';
+    }
+    playHit();
+    // Screen shake
+    shakeTimer = 6;
+    shakeIntensity = dmg > 8 ? 6 : 3;
+  }
+
+  update() {
+    if (this.state === 'ko') {
+      this.y += 2;
+      if (this.y > this.groundY + 30) this.y = this.groundY + 30;
+      return;
+    }
+
+    // Gravity
+    if (this.isJumping) {
+      this.velY += 0.7;
+      this.y += this.velY;
+      if (this.y >= this.groundY) {
+        this.y = this.groundY;
+        this.isJumping = false;
+        this.velY = 0;
+      }
+    }
+
+    // Movement
+    this.x += this.velX;
+    this.velX *= 0.85;
+
+    // Boundaries
+    if (this.x < 40) this.x = 40;
+    if (this.x > 760) this.x = 760;
+
+    // Attack timer
+    if (this.attackTimer > 0) {
+      this.attackTimer--;
+      if (this.attackTimer <= 0) this.state = 'idle';
+    }
+
+    // Hit stun
+    if (this.hitTimer > 0) {
+      this.hitTimer--;
+      if (this.hitTimer <= 0) this.state = 'idle';
+    }
+
+    // Animation
+    this.animTimer++;
+    if (this.animTimer > 8) { this.animTimer = 0; this.animFrame = (this.animFrame + 1) % 4; }
+
+    // Combo decay
+    if (this.comboTimer > 0) this.comboTimer--;
+    else this.comboCount = 0;
+  }
+
+  aiUpdate(opponent) {
+    if (!this.isAI || this.state === 'ko') return;
+    this.aiTimer++;
+    
+    let dist = Math.abs(this.x - opponent.x);
+    let facingOpp = (opponent.x > this.x) ? 1 : -1;
+    this.facing = facingOpp;
+
+    if (this.aiTimer < this.aiReactTime) return;
+    this.aiTimer = 0;
+    this.aiReactTime = 20 + Math.random() * 30;
+
+    // AI decisions
+    if (opponent.attackTimer > 10 && dist < 80 && Math.random() > 0.4) {
+      // Block/dodge by crouching or jumping
+      if (Math.random() > 0.5) this.jump();
+      else this.isCrouching = true;
+      setTimeout(() => { this.isCrouching = false; }, 400);
+      return;
+    }
+
+    if (dist > 150) {
+      // Approach
+      this.velX = facingOpp * this.speed * 0.7;
+      if (Math.random() > 0.7) this.jump();
+    } else if (dist < 90) {
+      // Attack range
+      let r = Math.random();
+      if (r < 0.25) this.attack('lowKick');
+      else if (r < 0.5) this.attack('highKick');
+      else if (r < 0.75) this.attack('lowPunch');
+      else this.attack('highPunch');
+    } else {
+      // Mid range - approach or attack
+      if (Math.random() > 0.5) {
+        this.velX = facingOpp * this.speed * 0.5;
+      } else {
+        this.attack(Math.random() > 0.5 ? 'highKick' : 'highPunch');
+      }
+    }
+
+    // Random jump attacks
+    if (this.isJumping && dist < 100 && Math.random() > 0.6) {
+      this.attack(Math.random() > 0.5 ? 'highKick' : 'lowKick');
+    }
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    
+    let bobY = (this.state === 'idle') ? Math.sin(this.animTimer * 0.3) * 2 : 0;
+    
+    if (this.state === 'ko') {
+      // Draw knocked out (lying down)
+      ctx.fillStyle = this.color;
+      ctx.fillRect(-30, 50, 60, 20);
+      ctx.fillStyle = this.accent;
+      ctx.fillRect(-20, 45, 20, 15);
+      // X eyes
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-18,48); ctx.lineTo(-12,54); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-12,48); ctx.lineTo(-18,54); ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
+    let crouchOffset = this.isCrouching ? 30 : 0;
+    let heightMod = this.isCrouching ? 0.6 : 1;
+
+    // Hit flash
+    if (this.hitTimer > 0 && this.hitTimer % 4 < 2) {
+      ctx.globalAlpha = 0.6;
+    }
+
+    // Body
+    ctx.fillStyle = this.color;
+    let bodyH = 50 * heightMod;
+    ctx.fillRect(-20, crouchOffset + bobY, 40, bodyH);
+    
+    // Accent/belt
+    ctx.fillStyle = this.accent;
+    ctx.fillRect(-20, crouchOffset + bobY + bodyH * 0.6, 40, 8);
+
+    // Head
+    let headY = crouchOffset + bobY - 25 * heightMod;
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.arc(0, headY, 18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Character specific features
+    if (this.charIdx === 0) {
+      // Panda - black eye patches and ears
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(-7, headY - 2, 7, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(7, headY - 2, 7, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-7, headY - 2, 3, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(7, headY - 2, 3, 0, Math.PI*2); ctx.fill();
+      // Ears
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(-14, headY - 18, 7, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(14, headY - 18, 7, 0, Math.PI*2); ctx.fill();
+      // Judo gi collar
+      ctx.strokeStyle = '#ddd';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-10, crouchOffset + bobY + 5);
+      ctx.lineTo(0, crouchOffset + bobY + 20);
+      ctx.lineTo(10, crouchOffset + bobY + 5);
+      ctx.stroke();
+    } else if (this.charIdx === 1) {
+      // Raccoon - mask and pointed ears
+      ctx.fillStyle = '#222';
+      ctx.fillRect(-14, headY - 6, 28, 8);
+      ctx.fillStyle = this.eye;
+      ctx.beginPath(); ctx.arc(-6, headY - 2, 3, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(6, headY - 2, 3, 0, Math.PI*2); ctx.fill();
+      // Pointed ears
+      ctx.fillStyle = '#666';
+      ctx.beginPath(); ctx.moveTo(-10, headY-18); ctx.lineTo(-16, headY-30); ctx.lineTo(-4, headY-20); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(10, headY-18); ctx.lineTo(16, headY-30); ctx.lineTo(4, headY-20); ctx.fill();
+      // Ninja headband
+      ctx.fillStyle = '#cc0000';
+      ctx.fillRect(-18, headY - 14, 36, 5);
+      // Tail bands
+      ctx.strokeStyle = '#222';
+      ctx.lineWidth = 2;
+      let tailX = this.facing === 1 ? -25 : 25;
+      ctx.beginPath(); ctx.moveTo(tailX, crouchOffset+bobY+30); ctx.lineTo(tailX+this.facing*-15, crouchOffset+bobY+15); ctx.stroke();
+    } else if (this.charIdx === 2) {
+      // Dog - floppy ears and snout
+      ctx.fillStyle = this.accent;
+      ctx.beginPath(); ctx.arc(-14, headY - 8, 6, 0, Math.PI*2); ctx.fill();
+      ctx.fillRect(-18, headY - 8, 8, 18);
+      ctx.beginPath(); ctx.arc(14, headY - 8, 6, 0, Math.PI*2); ctx.fill();
+      ctx.fillRect(12, headY - 8, 8, 18);
+      // Eyes
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(-6, headY - 3, 3, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(6, headY - 3, 3, 0, Math.PI*2); ctx.fill();
+      // Snout
+      ctx.fillStyle = '#aa7733';
+      ctx.beginPath(); ctx.arc(0, headY + 6, 8, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(0, headY + 4, 3, 0, Math.PI); ctx.fill();
+      // Karate headband
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(-16, headY - 16, 32, 4);
+      // Gi
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(-22, crouchOffset + bobY, 44, bodyH);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(-22, crouchOffset + bobY + bodyH*0.5, 44, 4);
+    }
+
+    // Arms
+    let armY = crouchOffset + bobY + 10;
+    ctx.fillStyle = this.color;
+    if (this.state === 'attack' && (this.attackType === 'lowPunch' || this.attackType === 'highPunch')) {
+      // Extended punch arm
+      let punchY = this.attackType === 'highPunch' ? armY : armY + 25;
+      ctx.fillRect(this.facing * 20, punchY, this.facing * 35, 10);
+      // Fist
+      ctx.fillStyle = this.accent;
+      ctx.fillRect(this.facing * 50, punchY - 2, 14, 14);
+    } else {
+      // Normal arms
+      ctx.fillRect(-28, armY, 12, 8);
+      ctx.fillRect(16, armY, 12, 8);
+    }
+
+    // Legs
+    let legY = crouchOffset + bobY + bodyH - 5;
+    ctx.fillStyle = this.accent;
+    if (this.state === 'attack' && (this.attackType === 'lowKick' || this.attackType === 'highKick')) {
+      // Extended kick leg
+      let kickY = this.attackType === 'highKick' ? legY - 10 : legY + 15;
+      ctx.fillRect(this.facing * 15, kickY, this.facing * 40, 10);
+      // Foot
+      ctx.fillStyle = this.color;
+      ctx.fillRect(this.facing * 50, kickY - 2, 12, 14);
+    } else {
+      // Normal legs
+      let walkOffset = (this.state === 'walk') ? Math.sin(this.animFrame * 1.5) * 6 : 0;
+      ctx.fillRect(-15, legY, 10, 25 - crouchOffset/2);
+      ctx.fillRect(8, legY, 10, 25 - crouchOffset/2);
+      if (!this.isCrouching) {
+        ctx.fillRect(-18, legY + 20, 14, 6);
+        ctx.fillRect(6, legY + 20, 14, 6);
+      }
+    }
+
+    // Attack effect
+    if (this.attackTimer > 12) {
+      ctx.strokeStyle = '#ffff00';
+      ctx.lineWidth = 2;
+      let ex = this.facing * 55;
+      let ey = (this.attackType.includes('high')) ? armY : legY + 10;
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.moveTo(ex + Math.random()*10-5, ey + Math.random()*10-5);
+        ctx.lineTo(ex + Math.random()*20-10, ey + Math.random()*20-10);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }
+}
+
+// Game variables
+let player, enemy;
+let round = 1;
+let maxRounds = 3;
+let roundTimer = 99;
+let roundTimerCounter = 0;
+let roundMessage = '';
+let roundMessageTimer = 0;
+let shakeTimer = 0;
+let shakeIntensity = 0;
+let keys = {};
+let fightStarted = false;
+let fightCountdown = 0;
+let particles = [];
+
+// Input
+document.addEventListener('keydown', (e) => {
+  initAudio();
+  keys[e.key.toLowerCase()] = true;
+  keys[e.code] = true;
+  
+  if (gameState === STATE.INTRO) {
+    gameState = STATE.SELECT;
+    playConfirm();
+  } else if (gameState === STATE.SELECT) {
+    if (e.code === 'ArrowLeft') { selectCursor = (selectCursor + 2) % 3; playSelect(); }
+    if (e.code === 'ArrowRight') { selectCursor = (selectCursor + 1) % 3; playSelect(); }
+    if (e.code === 'Enter' || e.code === 'Space') {
+      if (selectedPlayer === -1) {
+        selectedPlayer = selectCursor;
+        playConfirm();
+        // Auto select enemy
+        let enemies = [0,1,2].filter(i => i !== selectedPlayer);
+        selectedEnemy = enemies[Math.floor(Math.random() * enemies.length)];
+        setTimeout(startFight, 800);
+      }
+    }
+  } else if (gameState === STATE.GAME_OVER) {
+    if (e.code === 'Enter' || e.code === 'Space') {
+      resetGame();
+    }
+  }
+});
+document.addEventListener('keyup', (e) => {
+  keys[e.key.toLowerCase()] = false;
+  keys[e.code] = false;
+});
+
+function startFight() {
+  gameState = STATE.FIGHT;
+  player = new Fighter(selectedPlayer, 200, 1, false);
+  enemy = new Fighter(selectedEnemy, 600, -1, true);
+  fightStarted = false;
+  fightCountdown = 180;
+  roundMessage = 'ROUND ' + round;
+  roundMessageTimer = 120;
+  roundTimer = 99;
+  roundTimerCounter = 0;
+  playRound();
+}
+
+function resetGame() {
+  gameState = STATE.SELECT;
+  selectedPlayer = -1;
+  selectedEnemy = -1;
+  round = 1;
+  selectCursor = 0;
+}
+
+function nextRound() {
+  round++;
+  if (player.wins >= 2 || enemy.wins >= 2 || round > maxRounds) {
+    gameState = STATE.GAME_OVER;
+    return;
+  }
+  setTimeout(startFight, 1500);
+}
+
+// Particles
+class Particle {
+  constructor(x, y, color, velX, velY, life) {
+    this.x = x; this.y = y; this.color = color;
+    this.velX = velX; this.velY = velY;
+    this.life = life; this.maxLife = life;
+  }
+  update() {
+    this.x += this.velX; this.y += this.velY;
+    this.velY += 0.2; this.life--;
+  }
+  draw(ctx) {
+    ctx.globalAlpha = this.life / this.maxLife;
+    ctx.fillStyle = this.color;
+    ctx.fillRect(this.x-2, this.y-2, 4, 4);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function spawnHitParticles(x, y) {
+  for (let i = 0; i < 8; i++) {
+    particles.push(new Particle(x, y, 
+      ['#ff0', '#f80', '#fff', '#f00'][Math.floor(Math.random()*4)],
+      (Math.random()-0.5)*8, (Math.random()-0.5)*8, 20+Math.random()*10));
+  }
+}
+
+// Collision
+function boxOverlap(a, b) {
+  if (!a || !b) return false;
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// Draw functions
+function drawMarketBackground() {
+  // Sky gradient
+  let grad = ctx.createLinearGradient(0, 0, 0, 300);
+  grad.addColorStop(0, '#ff6633');
+  grad.addColorStop(0.5, '#ff9944');
+  grad.addColorStop(1, '#ffcc66');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 800, 300);
+
+  // Distant buildings
+  ctx.fillStyle = '#553322';
+  ctx.fillRect(0, 150, 800, 150);
+  ctx.fillStyle = '#664433';
+  for (let i = 0; i < 10; i++) {
+    let bh = 40 + Math.sin(i*2.5)*30;
+    ctx.fillRect(i*85, 150 - bh, 75, bh + 50);
+    // Windows
+    ctx.fillStyle = '#ffee88';
+    for (let wy = 0; wy < 3; wy++) {
+      for (let wx = 0; wx < 3; wx++) {
+        ctx.fillRect(i*85 + 10 + wx*20, 155 - bh + wy*15 + 5, 8, 8);
+      }
+    }
+    ctx.fillStyle = '#664433';
+  }
+
+  // Market stalls
+  ctx.fillStyle = '#882222';
+  ctx.fillRect(0, 260, 800, 20);
+  
+  // Left stall
+  ctx.fillStyle = '#aa3333';
+  ctx.fillRect(20, 230, 120, 60);
+  ctx.fillStyle = '#cc4444';
+  ctx.fillRect(15, 220, 130, 15);
+  // Awning
+  ctx.fillStyle = '#ee5555';
+  ctx.fillRect(10, 205, 140, 18);
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 7; i++) ctx.fillRect(15 + i*20, 208, 10, 12);
+  // Fruits
+  ctx.fillStyle = '#ff0'; ctx.beginPath(); ctx.arc(50, 260, 6, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#f80'; ctx.beginPath(); ctx.arc(70, 258, 7, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#f00'; ctx.beginPath(); ctx.arc(90, 260, 6, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#0a0'; ctx.beginPath(); ctx.arc(110, 259, 7, 0, Math.PI*2); ctx.fill();
+
+  // Right stall
+  ctx.fillStyle = '#2255aa';
+  ctx.fillRect(650, 235, 130, 55);
+  ctx.fillStyle = '#3366cc';
+  ctx.fillRect(645, 225, 140, 14);
+  ctx.fillStyle = '#4488ee';
+  ctx.fillRect(640, 210, 150, 18);
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 7; i++) ctx.fillRect(645 + i*21, 213, 10, 12);
+  // Pots/items
+  ctx.fillStyle = '#c96'; 
+  ctx.fillRect(670, 252, 15, 20);
+  ctx.fillRect(700, 248, 18, 24);
+  ctx.fillRect(730, 250, 14, 22);
+
+  // Center banner
+  ctx.fillStyle = '#cc2222';
+  ctx.fillRect(330, 180, 140, 40);
+  ctx.fillStyle = '#ffdd00';
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('STREET MARKET', 400, 205);
+
+  // Lanterns
+  ctx.fillStyle = '#ff3300';
+  ctx.beginPath(); ctx.arc(250, 190, 12, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(550, 185, 12, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ff6600';
+  ctx.beginPath(); ctx.arc(250, 190, 8, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(550, 185, 8, 0, Math.PI*2); ctx.fill();
+  // Lantern strings
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, 178); ctx.lineTo(250, 178); ctx.lineTo(550, 173); ctx.lineTo(800, 178); ctx.stroke();
+
+  // Ground
+  ctx.fillStyle = '#554433';
+  ctx.fillRect(0, 380, 800, 120);
+  ctx.fillStyle = '#665544';
+  ctx.fillRect(0, 380, 800, 5);
+  // Ground texture
+  ctx.fillStyle = '#443322';
+  for (let i = 0; i < 20; i++) {
+    ctx.fillRect(i * 42, 395, 35, 3);
+    ctx.fillRect(i * 42 + 20, 420, 35, 3);
+    ctx.fillRect(i * 42 + 5, 445, 35, 3);
+  }
+
+  // Crowd silhouettes in back
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  for (let i = 0; i < 15; i++) {
+    let cx = 30 + i * 55 + Math.sin(i*3)*15;
+    let cy = 300;
+    ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI*2); ctx.fill();
+    ctx.fillRect(cx-6, cy+8, 12, 25);
+  }
+}
+
+function drawHealthBar(x, y, health, maxHealth, name, wins, flipped) {
+  let barW = 280;
+  let barH = 20;
+  let ratio = health / maxHealth;
+  
+  // Background
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x, y, barW, barH);
+  
+  // Health
+  let healthColor = ratio > 0.5 ? '#00cc00' : ratio > 0.25 ? '#cccc00' : '#cc0000';
+  if (flipped) {
+    ctx.fillStyle = healthColor;
+    ctx.fillRect(x + barW * (1-ratio), y + 2, barW * ratio - 4, barH - 4);
+  } else {
+    ctx.fillStyle = healthColor;
+    ctx.fillRect(x + 2, y + 2, (barW - 4) * ratio, barH - 4);
+  }
+  
+  // Border
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, barW, barH);
+  
+  // Name
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = flipped ? 'right' : 'left';
+  ctx.fillText(name, flipped ? x + barW : x, y - 8);
+  
+  // Win markers
+  ctx.fillStyle = '#ffdd00';
+  for (let i = 0; i < wins; i++) {
+    let wx = flipped ? x + barW - 15 - i*20 : x + 5 + i*20;
+    ctx.beginPath(); ctx.arc(wx + 7, y + barH + 12, 6, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#aa8800';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('W', wx + 7, y + barH + 15);
+    ctx.fillStyle = '#ffdd00';
+  }
+}
+
+function drawIntro() {
+  // Background
+  let grad = ctx.createLinearGradient(0, 0, 0, 500);
+  grad.addColorStop(0, '#110022');
+  grad.addColorStop(0.5, '#220044');
+  grad.addColorStop(1, '#000');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 800, 500);
+
+  // Lightning/energy effects
+  introTimer++;
+  ctx.strokeStyle = `rgba(100,150,255,${0.3 + Math.sin(introTimer*0.05)*0.2})`;
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 5; i++) {
+    ctx.beginPath();
+    let sx = Math.random() * 800;
+    ctx.moveTo(sx, 0);
+    for (let j = 0; j < 5; j++) {
+      ctx.lineTo(sx + (Math.random()-0.5)*60, j * 100);
+    }
+    ctx.stroke();
+  }
+
+  // Title
+  ctx.save();
+  let scale = 1 + Math.sin(introTimer * 0.03) * 0.02;
+  ctx.translate(400, 140);
+  ctx.scale(scale, scale);
+  
+  ctx.fillStyle = '#ff4400';
+  ctx.font = 'bold 58px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('ANIMAL', 0, 0);
+  
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 72px monospace';
+  ctx.fillText('FIGHTER II', 0, 70);
+  
+  // Subtitle
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px monospace';
+  ctx.fillText('THE WORLD WARRIOR', 0, 110);
+  ctx.restore();
+
+  // Draw character silhouettes
+  let chars = ['PANDA', 'RACCOON', 'DOG'];
+  let colors = ['#fff', '#888', '#cc8844'];
+  for (let i = 0; i < 3; i++) {
+    let cx = 200 + i * 200;
+    let cy = 330;
+    ctx.fillStyle = colors[i];
+    ctx.globalAlpha = 0.7 + Math.sin(introTimer * 0.05 + i) * 0.3;
+    // Body silhouette
+    ctx.beginPath(); ctx.arc(cx, cy - 30, 20, 0, Math.PI*2); ctx.fill();
+    ctx.fillRect(cx - 15, cy - 10, 30, 50);
+    ctx.fillRect(cx - 25, cy, 10, 30);
+    ctx.fillRect(cx + 15, cy, 10, 30);
+    ctx.globalAlpha = 1;
+  }
+
+  // Flashing text
+  if (Math.floor(introTimer / 30) % 2 === 0) {
+    ctx.fillStyle = '#fff';
+    ctx.font = '20px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('PRESS ANY KEY TO START', 400, 450);
+  }
+}
+
+function drawSelect() {
+  // Background
+  ctx.fillStyle = '#111133';
+  ctx.fillRect(0, 0, 800, 500);
+  
+  // Grid pattern
+  ctx.strokeStyle = '#222255';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 40; i++) {
+    ctx.beginPath(); ctx.moveTo(i*20, 0); ctx.lineTo(i*20, 500); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i*20); ctx.lineTo(800, i*20); ctx.stroke();
+  }
+
+  // Title
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 32px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SELECT YOUR FIGHTER', 400, 50);
+
+  // Character portraits
+  for (let i = 0; i < 3; i++) {
+    let cx = 150 + i * 250;
+    let cy = 200;
+    let ch = CHARACTERS[i];
+    
+    // Portrait box
+    ctx.fillStyle = (i === selectCursor) ? '#443300' : '#222';
+    ctx.fillRect(cx - 80, cy - 80, 160, 200);
+    ctx.strokeStyle = (i === selectCursor) ? '#ffcc00' : '#555';
+    ctx.lineWidth = (i === selectCursor) ? 4 : 2;
+    ctx.strokeRect(cx - 80, cy - 80, 160, 200);
+    
+    if (i === selectedPlayer) {
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(cx - 84, cy - 84, 168, 208);
+    }
+
+    // Draw character preview
+    ctx.save();
+    ctx.translate(cx, cy + 10);
+    
+    // Body
+    ctx.fillStyle = ch.color;
+    ctx.fillRect(-20, -10, 40, 50);
+    ctx.fillStyle = ch.accent;
+    ctx.fillRect(-20, 20, 40, 8);
+    
+    // Head
+    ctx.fillStyle = ch.color;
+    ctx.beginPath(); ctx.arc(0, -30, 22, 0, Math.PI*2); ctx.fill();
+    
+    if (i === 0) { // Panda
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(-8, -32, 8, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(8, -32, 8, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-8, -32, 4, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(8, -32, 4, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(-16, -48, 8, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(16, -48, 8, 0, Math.PI*2); ctx.fill();
+    } else if (i === 1) { // Raccoon
+      ctx.fillStyle = '#222';
+      ctx.fillRect(-16, -36, 32, 8);
+      ctx.fillStyle = '#0f0';
+      ctx.beginPath(); ctx.arc(-7, -32, 4, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(7, -32, 4, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#cc0000';
+      ctx.fillRect(-20, -44, 40, 5);
+      ctx.fillStyle = '#666';
+      ctx.beginPath(); ctx.moveTo(-12,-48); ctx.lineTo(-18,-62); ctx.lineTo(-5,-50); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(12,-48); ctx.lineTo(18,-62); ctx.lineTo(5,-50); ctx.fill();
+    } else { // Dog
+      ctx.fillStyle = ch.accent;
+      ctx.fillRect(-20, -38, 10, 22);
+      ctx.fillRect(12, -38, 10, 22);
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(-7, -32, 4, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(7, -32, 4, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#aa7733';
+      ctx.beginPath(); ctx.arc(0, -22, 9, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(-18, -47, 36, 4);
+    }
+    
+    ctx.restore();
+
+    // Name
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(ch.name, cx, cy + 90);
+    
+    // Style description
+    ctx.fillStyle = '#aaa';
+    ctx.font = '10px monospace';
+    ctx.fillText(ch.style, cx, cy + 108);
+  }
+
+  // Instructions
+  ctx.fillStyle = '#888';
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('< LEFT/RIGHT to select, ENTER to confirm >', 400, 460);
+  
+  // Stats preview
+  if (selectCursor >= 0) {
+    let ch = CHARACTERS[selectCursor];
+    ctx.fillStyle = '#fff';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('SPEED: ' + '|'.repeat(Math.round(ch.speed)), 50, 420);
+    ctx.fillText('POWER: ' + '|'.repeat(Math.round(ch.damage.highPunch)), 50, 440);
+    ctx.fillText('HEALTH: ' + '|'.repeat(Math.round(ch.health/10)), 50, 460);
+  }
+}
+
+function drawFight() {
+  // Apply screen shake
+  ctx.save();
+  if (shakeTimer > 0) {
+    ctx.translate(
+      (Math.random()-0.5) * shakeIntensity,
+      (Math.random()-0.5) * shakeIntensity
+    );
+    shakeTimer--;
+  }
+
+  drawMarketBackground();
+
+  // Draw fighters
+  player.draw(ctx);
+  enemy.draw(ctx);
+
+  // Draw particles
+  particles.forEach(p => p.draw(ctx));
+
+  ctx.restore();
+
+  // HUD
+  drawHealthBar(20, 30, player.health, player.maxHealth, player.name, player.wins, false);
+  drawHealthBar(500, 30, enemy.health, enemy.maxHealth, enemy.name, enemy.wins, true);
+
+  // Timer
+  ctx.fillStyle = '#222';
+  ctx.fillRect(370, 20, 60, 40);
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(370, 20, 60, 40);
+  ctx.fillStyle = roundTimer <= 10 ? '#ff0000' : '#fff';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(Math.ceil(roundTimer).toString(), 400, 52);
+
+  // Round message
+  if (roundMessageTimer > 0) {
+    roundMessageTimer--;
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 48px monospace';
+    ctx.textAlign = 'center';
+    
+    let alpha = roundMessageTimer > 20 ? 1 : roundMessageTimer / 20;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillText(roundMessage, 400, 250);
+    ctx.globalAlpha = 1;
+    
+    if (roundMessageTimer === 60) {
+      roundMessage = 'FIGHT!';
+      roundMessageTimer = 50;
+      fightStarted = true;
+      playSound(500, 0.3, 'sawtooth', 0.2);
+    }
+  }
+
+  // Combo display
+  if (player.comboCount > 1) {
+    ctx.fillStyle = '#ff8800';
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(player.comboCount + ' HIT COMBO!', 30, 90);
+  }
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(0, 0, 800, 500);
+  
+  ctx.textAlign = 'center';
+  
+  if (player.wins >= 2) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = 'bold 48px monospace';
+    ctx.fillText('YOU WIN!', 400, 200);
+    ctx.fillStyle = '#fff';
+    ctx.font = '20px monospace';
+    ctx.fillText(player.name + ' is the champion!', 400, 260);
+  } else {
+    ctx.fillStyle = '#ff3300';
+    ctx.font = 'bold 48px monospace';
+    ctx.fillText('DEFEAT', 400, 200);
+    ctx.fillStyle = '#fff';
+    ctx.font = '20px monospace';
+    ctx.fillText(enemy.name + ' wins!', 400, 260);
+  }
+  
+  ctx.fillStyle = '#888';
+  ctx.font = '16px monospace';
+  ctx.fillText('Press ENTER to return to character select', 400, 350);
+}
+
+function updateFight() {
+  if (!fightStarted) return;
+  if (player.state === 'ko' || enemy.state === 'ko') {
+    roundMessageTimer = roundMessageTimer || 0;
+    if (roundMessageTimer <= 0) {
+      if (player.state === 'ko') {
+        roundMessage = 'K.O.!';
+        enemy.wins++;
+      } else {
+        roundMessage = 'K.O.!';
+        player.wins++;
+      }
+      roundMessageTimer = 90;
+      fightStarted = false;
+      setTimeout(nextRound, 2500);
+    }
+    return;
+  }
+
+  // Timer
+  roundTimerCounter++;
+  if (roundTimerCounter >= 60) {
+    roundTimerCounter = 0;
+    roundTimer--;
+    if (roundTimer <= 0) {
+      roundTimer = 0;
+      // Time up - whoever has more health wins
+      if (player.health > enemy.health) {
+        enemy.state = 'ko';
+      } else if (enemy.health > player.health) {
+        player.state = 'ko';
+      } else {
+        // Draw - enemy wins (like arcade)
+        player.state = 'ko';
+      }
+      roundMessage = 'TIME!';
+      roundMessageTimer = 90;
+      fightStarted = false;
+      if (player.state === 'ko') enemy.wins++;
+      else player.wins++;
+      setTimeout(nextRound, 2500);
+      return;
+    }
+  }
+
+  // Player input
+  if (player.hitTimer <= 0 && player.state !== 'ko') {
+    if (keys['ArrowRight']) { player.velX = player.speed; player.state = 'walk'; }
+    else if (keys['ArrowLeft']) { player.velX = -player.speed; player.state = 'walk'; }
+    else if (player.attackTimer <= 0) { player.state = 'idle'; }
+    
+    if (keys['ArrowUp']) player.jump();
+    player.isCrouching = !!keys['ArrowDown'];
+    
+    if (keys['a']) { player.attack('lowKick'); keys['a'] = false; }
+    if (keys['s']) { player.attack('highKick'); keys['s'] = false; }
+    if (keys['d']) { player.attack('lowPunch'); keys['d'] = false; }
+    if (keys['f']) { player.attack('highPunch'); keys['f'] = false; }
+  }
+
+  // Face opponent
+  if (player.x < enemy.x) { player.facing = 1; enemy.facing = -1; }
+  else { player.facing = -1; enemy.facing = 1; }
+
+  // AI update
+  enemy.aiUpdate(player);
+
+  // Update fighters
+  player.update();
+  enemy.update();
+
+  // Collision detection - player attacking enemy
+  let pAttack = player.getAttackBox();
+  let eHitbox = enemy.getHitbox();
+  if (pAttack && !player.hasHit && boxOverlap(pAttack, eHitbox) && enemy.hitTimer <= 0) {
+    let dmg = player.damage[player.attackType];
+    // Bonus for jumping attacks
+    if (player.isJumping) dmg = Math.floor(dmg * 1.3);
+    enemy.takeHit(dmg);
+    player.hasHit = true;
+    player.comboCount++;
+    player.comboTimer = 60;
+    spawnHitParticles(enemy.x, enemy.y + 20);
+  }
+
+  // Enemy attacking player
+  let eAttack = enemy.getAttackBox();
+  let pHitbox = player.getHitbox();
+  if (eAttack && !enemy.hasHit && boxOverlap(eAttack, pHitbox) && player.hitTimer <= 0) {
+    let dmg = enemy.damage[enemy.attackType];
+    if (enemy.isJumping) dmg = Math.floor(dmg * 1.3);
+    // Reduce damage if crouching against high attacks
+    if (player.isCrouching && enemy.attackType.includes('high')) dmg = Math.floor(dmg * 0.3);
+    player.takeHit(dmg);
+    enemy.hasHit = true;
+    spawnHitParticles(player.x, player.y + 20);
+  }
+
+  // Push apart if overlapping
+  let dist = Math.abs(player.x - enemy.x);
+  if (dist < 45) {
+    let push = (45 - dist) / 2;
+    if (player.x < enemy.x) { player.x -= push; enemy.x += push; }
+    else { player.x += push; enemy.x -= push; }
+  }
+
+  // Update particles
+  particles = particles.filter(p => { p.update(); return p.life > 0; });
+}
+
+// Main loop
+function gameLoop() {
+  ctx.clearRect(0, 0, 800, 500);
+  
+  switch(gameState) {
+    case STATE.INTRO:
+      drawIntro();
+      break;
+    case STATE.SELECT:
+      drawSelect();
+      break;
+    case STATE.FIGHT:
+      updateFight();
+      drawFight();
+      break;
+    case STATE.GAME_OVER:
+      drawFight();
+      drawGameOver();
+      break;
+  }
+  
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>

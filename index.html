@@ -1,0 +1,2804 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Animal Fighters</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="gc" width="960" height="540"></canvas>
+<script>// ============================================================
+// ANIMAL FIGHTERS
+// Complete Fighting Game with Detailed Character Sprites
+// ============================================================
+
+const canvas = document.getElementById('gc');
+const ctx = canvas.getContext('2d');
+const W = 960, H = 540;
+
+// Game States
+const STATE = { INTRO: 0, SELECT: 1, FIGHT: 2, GAMEOVER: 3 };
+let gameState = STATE.INTRO;
+let introTimer = 0;
+let introPhase = 0;
+
+// Audio Context
+let audioCtx = null;
+let masterGain = null;
+let musicPlaying = false;
+let currentTrack = null;
+
+// Characters
+const CHARS = [
+  { name: 'JUDO PANDA', style: 'Judo', speed: 3, power: 9, defense: 8, hp: 110, color: '#ffffff' },
+  { name: 'NINJA RACCOON', style: 'Ninjutsu', speed: 10, power: 7, defense: 5, hp: 90, color: '#708090' },
+  { name: 'KARATE DOG', style: 'Karate', speed: 6, power: 8, defense: 7, hp: 100, color: '#DAA520' }
+];
+
+// Player/Game state
+let p1 = { char: 0, x: 200, y: 380, hp: 100, maxHp: 100, vx: 0, vy: 0, facing: 1, state: 'idle', attackType: '', attackTimer: 0, attackAnimFrame: 0, hitTimer: 0, blockTimer: 0, wins: 0, animFrame: 0, jumpY: 0, crouching: false, comboCount: 0, _hitRegistered: false };
+let p2 = { char: 1, x: 700, y: 380, hp: 100, maxHp: 100, vx: 0, vy: 0, facing: -1, state: 'idle', attackType: '', attackTimer: 0, attackAnimFrame: 0, hitTimer: 0, blockTimer: 0, wins: 0, animFrame: 0, jumpY: 0, crouching: false, comboCount: 0, _hitRegistered: false };
+
+let selectCursor = 0;
+let selectConfirmed = false;
+let p2Char = 1;
+let roundNum = 1;
+let roundTimer = 99;
+let roundTimerFrame = 0;
+let roundStartTimer = 0;
+let roundOver = false;
+let gameOverTimer = 0;
+let winner = '';
+let particles = [];
+let screenShake = 0;
+let frameCount = 0;
+
+// Keys
+const keys = {};
+document.addEventListener('keydown', e => { keys[e.key] = true; if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault(); if (gameState === STATE.INTRO && introPhase < 3) introPhase = 3; initAudio(); });
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ============================================================
+// MUSIC ENGINE - MK-Style Dark Aggressive Music
+// ============================================================
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.3;
+  masterGain.connect(audioCtx.destination);
+}
+
+function playNote(freq, duration, type, gain, startTime, detune) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type || 'square';
+  osc.frequency.value = freq;
+  if (detune) osc.detune.value = detune;
+  g.gain.setValueAtTime(gain || 0.1, startTime);
+  g.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+  osc.connect(g);
+  g.connect(masterGain);
+  osc.start(startTime);
+  osc.stop(startTime + duration);
+}
+
+function playDrum(type, startTime) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  if (type === 'kick') {
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, startTime);
+    osc.frequency.exponentialRampToValueAtTime(30, startTime + 0.15);
+    g.gain.setValueAtTime(0.5, startTime);
+    g.gain.exponentialRampToValueAtTime(0.001, startTime + 0.2);
+  } else if (type === 'snare') {
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(200, startTime);
+    osc.frequency.exponentialRampToValueAtTime(50, startTime + 0.1);
+    g.gain.setValueAtTime(0.3, startTime);
+    g.gain.exponentialRampToValueAtTime(0.001, startTime + 0.15);
+    const noise = audioCtx.createOscillator();
+    const ng = audioCtx.createGain();
+    noise.type = 'sawtooth';
+    noise.frequency.value = 3000;
+    ng.gain.setValueAtTime(0.15, startTime);
+    ng.gain.exponentialRampToValueAtTime(0.001, startTime + 0.1);
+    noise.connect(ng); ng.connect(masterGain);
+    noise.start(startTime); noise.stop(startTime + 0.1);
+  } else if (type === 'hihat') {
+    osc.type = 'sawtooth';
+    osc.frequency.value = 6000;
+    g.gain.setValueAtTime(0.08, startTime);
+    g.gain.exponentialRampToValueAtTime(0.001, startTime + 0.05);
+  }
+  osc.connect(g); g.connect(masterGain);
+  osc.start(startTime); osc.stop(startTime + 0.3);
+}
+
+function playIntroMusic() {
+  if (!audioCtx) return;
+  const bpm = 85;
+  const beatLen = 60 / bpm;
+  const t = audioCtx.currentTime + 0.1;
+  const bassNotes = [55, 55, 65.4, 55, 55, 73.4, 55, 82.4];
+  for (let i = 0; i < 16; i++) {
+    const note = bassNotes[i % bassNotes.length];
+    playNote(note, beatLen * 0.8, 'sawtooth', 0.15, t + i * beatLen);
+    playDrum('kick', t + i * beatLen);
+    if (i % 2 === 1) playDrum('snare', t + i * beatLen);
+    playDrum('hihat', t + i * beatLen + beatLen * 0.5);
+    if (i % 4 === 0) playNote(note * 4, beatLen * 0.3, 'square', 0.06, t + i * beatLen);
+  }
+  // Dark melody
+  const melody = [220, 196, 165, 147, 165, 196, 220, 262, 220, 196, 165, 147, 131, 147, 165, 196];
+  for (let i = 0; i < 16; i++) {
+    playNote(melody[i], beatLen * 0.6, 'square', 0.07, t + i * beatLen, -5);
+  }
+}
+
+function playSelectMusic() {
+  if (!audioCtx) return;
+  const bpm = 100;
+  const beatLen = 60 / bpm;
+  const t = audioCtx.currentTime + 0.1;
+  const bassLine = [82.4, 82.4, 98, 110, 82.4, 82.4, 73.4, 82.4];
+  for (let i = 0; i < 24; i++) {
+    const note = bassLine[i % bassLine.length];
+    playNote(note, beatLen * 0.5, 'sawtooth', 0.12, t + i * beatLen);
+    playDrum('kick', t + i * beatLen);
+    if (i % 2 === 1) playDrum('snare', t + i * beatLen);
+    playDrum('hihat', t + i * beatLen);
+    playDrum('hihat', t + i * beatLen + beatLen * 0.5);
+    if (i % 2 === 0) playNote(note * 3, beatLen * 0.2, 'triangle', 0.05, t + i * beatLen + beatLen * 0.25);
+  }
+  const selMelody = [330, 392, 440, 392, 330, 294, 330, 392, 440, 523, 440, 392, 330, 294, 262, 294];
+  for (let i = 0; i < 16; i++) {
+    playNote(selMelody[i], beatLen * 0.4, 'square', 0.06, t + i * beatLen * 1.5);
+  }
+}
+
+function playFightMusic() {
+  if (!audioCtx) return;
+  const bpm = 140;
+  const beatLen = 60 / bpm;
+  const t = audioCtx.currentTime + 0.1;
+  const bassLine = [110, 110, 130.8, 110, 146.8, 130.8, 110, 98];
+  for (let i = 0; i < 32; i++) {
+    const note = bassLine[i % bassLine.length];
+    playNote(note, beatLen * 0.4, 'sawtooth', 0.13, t + i * beatLen, 3);
+    playDrum('kick', t + i * beatLen);
+    if (i % 2 === 1) playDrum('snare', t + i * beatLen);
+    playDrum('hihat', t + i * beatLen);
+    if (i % 4 === 2) playDrum('hihat', t + i * beatLen + beatLen * 0.25);
+    // Power chords
+    if (i % 4 === 0) {
+      playNote(note * 2, beatLen * 0.3, 'sawtooth', 0.08, t + i * beatLen);
+      playNote(note * 3, beatLen * 0.3, 'sawtooth', 0.05, t + i * beatLen);
+    }
+  }
+  const fightMelody = [440, 523, 587, 523, 440, 392, 440, 523, 587, 659, 587, 523, 440, 392, 349, 392];
+  for (let i = 0; i < 16; i++) {
+    playNote(fightMelody[i], beatLen * 0.35, 'square', 0.06, t + (i * 2) * beatLen);
+  }
+}
+
+let musicInterval = null;
+let musicAudio = null;
+function startMusic(track) {
+  stopMusic();
+  if (track === 'intro') {
+    musicAudio = new Audio('intro.mp3');
+    musicAudio.loop = true;
+    musicAudio.volume = 0.7;
+    musicAudio.play().catch(() => {});
+  } else if (track === 'select') {
+    musicAudio = new Audio('fighter_select.mp3');
+    musicAudio.loop = true;
+    musicAudio.volume = 0.7;
+    musicAudio.play().catch(() => {});
+  } else if (track === 'fight') {
+    musicAudio = new Audio('fight.mp3');
+    musicAudio.loop = true;
+    musicAudio.volume = 0.7;
+    musicAudio.play().catch(() => {});
+  }
+  currentTrack = track;
+}
+function stopMusic() {
+  if (musicInterval) { clearInterval(musicInterval); musicInterval = null; }
+  if (musicAudio) { musicAudio.pause(); musicAudio.currentTime = 0; musicAudio = null; }
+}
+
+// Sound Effects
+function playSFX(type) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  if (type === 'hit') {
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(800, t); o.frequency.exponentialRampToValueAtTime(100, t+0.1);
+    g.gain.setValueAtTime(0.3, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.12);
+    o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.12);
+  } else if (type === 'heavyhit') {
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(400, t); o.frequency.exponentialRampToValueAtTime(40, t+0.2);
+    g.gain.setValueAtTime(0.4, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.25);
+    o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.25);
+    playDrum('kick', t);
+  } else if (type === 'select') {
+    playNote(523, 0.1, 'square', 0.15, t); playNote(659, 0.1, 'square', 0.15, t+0.08);
+  } else if (type === 'confirm') {
+    playNote(523, 0.08, 'square', 0.12, t); playNote(659, 0.08, 'square', 0.12, t+0.06);
+    playNote(784, 0.15, 'square', 0.12, t+0.12);
+  } else if (type === 'ko') {
+    for (let i = 0; i < 6; i++) playNote(200 + i * 50, 0.3, 'sawtooth', 0.12 - i*0.015, t + i*0.12);
+    playDrum('kick', t); playDrum('snare', t+0.2); playDrum('kick', t+0.4);
+  } else if (type === 'round') {
+    playNote(392, 0.15, 'square', 0.12, t); playNote(523, 0.2, 'square', 0.12, t+0.15);
+  } else if (type === 'block') {
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = 'triangle'; o.frequency.value = 300;
+    g.gain.setValueAtTime(0.2, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.08);
+    o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.08);
+  }
+}
+
+// ============================================================
+// DETAILED CHARACTER PORTRAIT DRAWING FUNCTION
+// ============================================================
+function drawCharacterPortrait(ctx, charIdx, x, y, scale, options) {
+  const opt = options || {};
+  const facing = opt.facing || 1;
+  const state = opt.state || 'idle';
+  const attackType = opt.attackType || '';
+  const animFrame = opt.animFrame || 0;
+  const breathe = opt.breathe !== undefined ? opt.breathe : Math.sin(frameCount * 0.05) * 2;
+  const isCrouching = opt.crouching || false;
+  
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(facing * scale, scale);
+  
+  // Animation offsets
+  let bodyOffY = breathe;
+  let armLAngle = 0, armRAngle = 0;
+  let legLAngle = 0, legRAngle = 0;
+  let headTilt = 0;
+  let crouchSquish = isCrouching ? 0.7 : 1;
+  
+  if (state === 'idle') {
+    armLAngle = Math.sin(animFrame * 0.08) * 0.1 - 0.3;
+    armRAngle = Math.sin(animFrame * 0.08 + 1) * 0.1 + 0.3;
+    legLAngle = Math.sin(animFrame * 0.06) * 0.05;
+    legRAngle = -Math.sin(animFrame * 0.06) * 0.05;
+  } else if (state === 'walk') {
+    armLAngle = Math.sin(animFrame * 0.2) * 0.5;
+    armRAngle = -Math.sin(animFrame * 0.2) * 0.5;
+    legLAngle = Math.sin(animFrame * 0.2) * 0.4;
+    legRAngle = -Math.sin(animFrame * 0.2) * 0.4;
+    bodyOffY += Math.abs(Math.sin(animFrame * 0.2)) * 2;
+  } else if (state === 'attack') {
+    if (attackType === 'lowpunch' || attackType === 'highpunch') {
+      armRAngle = 1.2 - Math.min(1, animFrame * 0.15) * 2.5;
+      bodyOffY -= 3;
+    } else if (attackType === 'lowkick') {
+      legRAngle = 0.3 - Math.min(1, animFrame * 0.12) * 1.8;
+      bodyOffY -= 2;
+    } else if (attackType === 'highkick') {
+      legRAngle = 0.5 - Math.min(1, animFrame * 0.12) * 2.5;
+      bodyOffY -= 5;
+      armLAngle = -0.5;
+    }
+  } else if (state === 'hit') {
+    bodyOffY += 3;
+    headTilt = 0.15;
+    armLAngle = 0.3;
+    armRAngle = 0.5;
+  } else if (state === 'block') {
+    armLAngle = -0.8;
+    armRAngle = -0.6;
+    bodyOffY += 2;
+  } else if (state === 'jump') {
+    armLAngle = -0.7;
+    armRAngle = -0.7;
+    legLAngle = -0.3;
+    legRAngle = 0.3;
+  } else if (state === 'ko') {
+    ctx.rotate(Math.PI / 2 * Math.min(1, animFrame * 0.05));
+    bodyOffY += animFrame * 0.5;
+  }
+  
+  if (isCrouching) {
+    bodyOffY += 15;
+    legLAngle = 0.8;
+    legRAngle = 0.8;
+    armLAngle -= 0.2;
+    armRAngle += 0.2;
+  }
+
+  // Draw based on character
+  if (charIdx === 0) drawPanda(ctx, bodyOffY, armLAngle, armRAngle, legLAngle, legRAngle, headTilt, crouchSquish, animFrame, state, attackType);
+  else if (charIdx === 1) drawRaccoon(ctx, bodyOffY, armLAngle, armRAngle, legLAngle, legRAngle, headTilt, crouchSquish, animFrame, state, attackType);
+  else if (charIdx === 2) drawDog(ctx, bodyOffY, armLAngle, armRAngle, legLAngle, legRAngle, headTilt, crouchSquish, animFrame, state, attackType);
+  
+  ctx.restore();
+}
+
+// ============================================================
+// JUDO PANDA - Detailed Drawing
+// ============================================================
+function drawPanda(ctx, bodyOffY, armLA, armRA, legLA, legRA, headTilt, crouchSquish, animFrame, state, attackType) {
+  const by = bodyOffY;
+  
+  // === BACK LEG (left leg) ===
+  ctx.save();
+  ctx.translate(-8, 20 + by);
+  ctx.rotate(legLA);
+  // Gi pants - left leg
+  ctx.fillStyle = '#f0f0f0';
+  ctx.beginPath();
+  ctx.moveTo(-7, 0);
+  ctx.lineTo(-9, 20);
+  ctx.lineTo(-10, 40);
+  ctx.lineTo(6, 40);
+  ctx.lineTo(7, 20);
+  ctx.lineTo(5, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Pants shading
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  ctx.fillRect(-9, 5, 4, 30);
+  // Fabric wrinkles
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(-5, 8); ctx.quadraticCurveTo(0, 10, 4, 8);
+  ctx.moveTo(-6, 18); ctx.quadraticCurveTo(-1, 20, 4, 17);
+  ctx.moveTo(-7, 28); ctx.quadraticCurveTo(-2, 31, 5, 28);
+  ctx.stroke();
+  // Foot
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(-2, 43, 8, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Toe pads
+  ctx.fillStyle = '#3a3a3a';
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.ellipse(-5 + i * 3, 41, 1.5, 1.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+  
+  // === FRONT LEG (right leg) ===
+  ctx.save();
+  ctx.translate(8, 20 + by);
+  ctx.rotate(legRA);
+  // Gi pants - right leg
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(-6, 0);
+  ctx.lineTo(-8, 20);
+  ctx.lineTo(-9, 40);
+  ctx.lineTo(7, 40);
+  ctx.lineTo(8, 20);
+  ctx.lineTo(6, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Pants highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillRect(2, 5, 4, 30);
+  // Pants shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.1)';
+  ctx.fillRect(-8, 5, 4, 30);
+  // Fabric wrinkles
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(-4, 10); ctx.quadraticCurveTo(1, 12, 5, 10);
+  ctx.moveTo(-5, 22); ctx.quadraticCurveTo(0, 24, 5, 21);
+  ctx.moveTo(-6, 33); ctx.quadraticCurveTo(-1, 35, 5, 32);
+  ctx.stroke();
+  // Foot
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(0, 43, 9, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Toe pads
+  ctx.fillStyle = '#3a3a3a';
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.ellipse(-4 + i * 3, 41, 1.5, 1.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+  
+  // === BODY / TORSO (Judo Gi) ===
+  ctx.save();
+  ctx.translate(0, by);
+  // Main gi body
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(-18, -25);
+  ctx.lineTo(-20, 20);
+  ctx.lineTo(-15, 25);
+  ctx.lineTo(15, 25);
+  ctx.lineTo(20, 20);
+  ctx.lineTo(18, -25);
+  ctx.closePath();
+  ctx.fill();
+  // Gi shading - left side shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  ctx.beginPath();
+  ctx.moveTo(-18, -25); ctx.lineTo(-20, 20); ctx.lineTo(-12, 20); ctx.lineTo(-12, -25);
+  ctx.closePath();
+  ctx.fill();
+  // Gi highlight - right side
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.beginPath();
+  ctx.moveTo(10, -20); ctx.lineTo(10, 15); ctx.lineTo(16, 15); ctx.lineTo(16, -20);
+  ctx.closePath();
+  ctx.fill();
+  // Gi lapel V-shape
+  ctx.strokeStyle = '#ddd';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-8, -25);
+  ctx.lineTo(0, 5);
+  ctx.lineTo(8, -25);
+  ctx.stroke();
+  // Inner lapel line
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-6, -23);
+  ctx.lineTo(0, 0);
+  ctx.lineTo(6, -23);
+  ctx.stroke();
+  // Chest fur visible in V
+  ctx.fillStyle = '#f5f5f5';
+  ctx.beginPath();
+  ctx.moveTo(-5, -20);
+  ctx.lineTo(0, -2);
+  ctx.lineTo(5, -20);
+  ctx.closePath();
+  ctx.fill();
+  // Chest fur texture
+  ctx.strokeStyle = 'rgba(0,0,0,0.05)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 5; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-3 + i*1.5, -18 + i*3);
+    ctx.lineTo(-2 + i*1.2, -14 + i*3);
+    ctx.stroke();
+  }
+  // BLACK BELT
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(-18, 8, 36, 5);
+  // Belt shading
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(-18, 8, 36, 1.5);
+  // Belt knot
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(3, 11, 4, 3, 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  // Belt tail hanging
+  ctx.fillStyle = '#222';
+  ctx.beginPath();
+  ctx.moveTo(5, 12); ctx.lineTo(8, 20); ctx.lineTo(6, 20); ctx.lineTo(3, 13);
+  ctx.closePath();
+  ctx.fill();
+  // Gi wrinkles on torso
+  ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(-14, -10); ctx.quadraticCurveTo(-8, -8, -5, -10);
+  ctx.moveTo(5, -8); ctx.quadraticCurveTo(10, -6, 14, -8);
+  ctx.moveTo(-12, 0); ctx.quadraticCurveTo(-6, 2, 0, 0);
+  ctx.stroke();
+  ctx.restore();
+  
+  // === BACK ARM (left arm) ===
+  ctx.save();
+  ctx.translate(-18, -18 + by);
+  ctx.rotate(armLA);
+  // Gi sleeve
+  ctx.fillStyle = '#f0f0f0';
+  ctx.beginPath();
+  ctx.moveTo(-4, -3);
+  ctx.lineTo(-7, 15);
+  ctx.lineTo(5, 15);
+  ctx.lineTo(4, -3);
+  ctx.closePath();
+  ctx.fill();
+  // Sleeve shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  ctx.fillRect(-6, 0, 3, 14);
+  // Forearm (white fur)
+  ctx.fillStyle = '#f8f8f8';
+  ctx.beginPath();
+  ctx.ellipse(-1, 22, 5, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Forearm shading
+  ctx.fillStyle = 'rgba(0,0,0,0.06)';
+  ctx.beginPath();
+  ctx.ellipse(-3, 22, 3, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Paw
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(-1, 32, 6, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Paw pads
+  ctx.fillStyle = '#4a4a4a';
+  ctx.beginPath();
+  ctx.ellipse(-1, 33, 3.5, 2.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Finger pads
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = '#4a4a4a';
+    ctx.beginPath();
+    ctx.ellipse(-3 + i * 3, 29, 1.5, 1.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+  
+  // === FRONT ARM (right arm) ===
+  ctx.save();
+  ctx.translate(18, -18 + by);
+  ctx.rotate(armRA);
+  // Gi sleeve
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(-5, -3);
+  ctx.lineTo(-6, 15);
+  ctx.lineTo(6, 15);
+  ctx.lineTo(5, -3);
+  ctx.closePath();
+  ctx.fill();
+  // Sleeve wrinkles
+  ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(-4, 3); ctx.quadraticCurveTo(0, 5, 4, 3);
+  ctx.moveTo(-5, 9); ctx.quadraticCurveTo(0, 11, 4, 9);
+  ctx.stroke();
+  // Forearm (white fur)
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(0, 22, 5.5, 9, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Muscle definition
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.arc(0, 20, 4, -0.5, 1.5);
+  ctx.stroke();
+  // Paw (fist for attack)
+  ctx.fillStyle = '#1a1a1a';
+  if (state === 'attack' && (attackType === 'lowpunch' || attackType === 'highpunch')) {
+    ctx.beginPath();
+    ctx.ellipse(0, 33, 7, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Fist detail
+    ctx.fillStyle = '#4a4a4a';
+    ctx.beginPath();
+    ctx.ellipse(0, 34, 4, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(0, 33, 6, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#4a4a4a';
+    ctx.beginPath();
+    ctx.ellipse(0, 34, 3.5, 2.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = '#4a4a4a';
+      ctx.beginPath();
+      ctx.ellipse(-3 + i * 3, 30, 1.5, 1.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+  
+  // === HEAD ===
+  ctx.save();
+  ctx.translate(0, -35 + by);
+  ctx.rotate(headTilt);
+  // Neck
+  ctx.fillStyle = '#f0f0f0';
+  ctx.fillRect(-6, 8, 12, 8);
+  // Neck muscle shading
+  ctx.fillStyle = 'rgba(0,0,0,0.05)';
+  ctx.fillRect(-6, 8, 4, 8);
+  // Head - main white circle
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(0, -5, 18, 17, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Head 3D shading - shadow on bottom right
+  ctx.fillStyle = 'rgba(0,0,0,0.06)';
+  ctx.beginPath();
+  ctx.ellipse(4, 2, 14, 13, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // Head highlight on top left
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.beginPath();
+  ctx.ellipse(-6, -10, 8, 6, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // EARS
+  // Left ear
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(-12, -18, 6, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Left ear inner (pink)
+  ctx.fillStyle = '#cc8899';
+  ctx.beginPath();
+  ctx.ellipse(-12, -18, 3, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Right ear
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(12, -18, 6, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Right ear inner (pink)
+  ctx.fillStyle = '#cc8899';
+  ctx.beginPath();
+  ctx.ellipse(12, -18, 3, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // EYE PATCHES (black)
+  // Left eye patch
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(-7, -4, 7, 6, -0.15, 0, Math.PI * 2);
+  ctx.fill();
+  // Right eye patch
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(7, -4, 7, 6, 0.15, 0, Math.PI * 2);
+  ctx.fill();
+  // EYES (white circles in patches)
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(-7, -4, 3.5, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(7, -4, 3.5, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Pupils
+  ctx.fillStyle = '#000000';
+  ctx.beginPath();
+  ctx.ellipse(-6, -3, 2, 2.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(8, -3, 2, 2.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Eye highlights
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(-5.5, -4.5, 1, 1, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(8.5, -4.5, 1, 1, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // NOSE
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(0, 4, 3, 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Nose highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(-0.5, 3.5, 1.2, 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Mouth
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-3, 7);
+  ctx.quadraticCurveTo(0, 9, 3, 7);
+  ctx.stroke();
+  
+  ctx.restore();
+}
+
+// ============================================================
+// NINJA RACCOON - Detailed Drawing
+// ============================================================
+function drawRaccoon(ctx, bodyOffY, armLA, armRA, legLA, legRA, headTilt, crouchSquish, animFrame, state, attackType) {
+  const by = bodyOffY;
+  
+  // === TAIL (behind body) ===
+  ctx.save();
+  ctx.translate(-5, 5 + by);
+  const tailWave = Math.sin(animFrame * 0.1) * 0.2;
+  ctx.rotate(-0.5 + tailWave);
+  // Bushy tail
+  ctx.fillStyle = '#808890';
+  ctx.beginPath();
+  ctx.moveTo(-3, 0);
+  ctx.quadraticCurveTo(-12, -15, -8, -35);
+  ctx.quadraticCurveTo(-5, -45, 2, -40);
+  ctx.quadraticCurveTo(8, -35, 5, -20);
+  ctx.quadraticCurveTo(4, -10, 3, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Tail rings (dark stripes)
+  ctx.fillStyle = '#3a3f44';
+  for (let i = 0; i < 5; i++) {
+    ctx.beginPath();
+    ctx.ellipse(-2, -5 - i * 7, 5 - i * 0.3, 2.5, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Tail highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.beginPath();
+  ctx.ellipse(0, -20, 3, 12, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  
+  // === BACK LEG (left leg) ===
+  ctx.save();
+  ctx.translate(-6, 18 + by);
+  ctx.rotate(legLA);
+  // Ninja pants
+  ctx.fillStyle = '#1a2030';
+  ctx.beginPath();
+  ctx.moveTo(-5, 0); ctx.lineTo(-6, 18); ctx.lineTo(-7, 38);
+  ctx.lineTo(5, 38); ctx.lineTo(5, 18); ctx.lineTo(4, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Leg wrap texture
+  ctx.strokeStyle = 'rgba(100,120,150,0.3)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 8; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-6, 2 + i * 4.5);
+    ctx.lineTo(5, 3 + i * 4.5);
+    ctx.stroke();
+  }
+  // Tabi boot
+  ctx.fillStyle = '#0a0a15';
+  ctx.beginPath();
+  ctx.moveTo(-7, 35); ctx.lineTo(-8, 42); ctx.lineTo(6, 42); ctx.lineTo(6, 35);
+  ctx.closePath();
+  ctx.fill();
+  // Split toe
+  ctx.strokeStyle = '#1a2030';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-1, 42); ctx.lineTo(-1, 38);
+  ctx.stroke();
+  ctx.restore();
+  
+  // === FRONT LEG (right leg) ===
+  ctx.save();
+  ctx.translate(6, 18 + by);
+  ctx.rotate(legRA);
+  // Ninja pants
+  ctx.fillStyle = '#222840';
+  ctx.beginPath();
+  ctx.moveTo(-5, 0); ctx.lineTo(-6, 18); ctx.lineTo(-6, 38);
+  ctx.lineTo(6, 38); ctx.lineTo(6, 18); ctx.lineTo(5, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Pants detail
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  ctx.fillRect(1, 2, 3, 32);
+  // Leg wrap texture
+  ctx.strokeStyle = 'rgba(100,120,150,0.25)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 8; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-5, 2 + i * 4.5);
+    ctx.lineTo(5, 3.5 + i * 4.5);
+    ctx.stroke();
+  }
+  // Tabi boot
+  ctx.fillStyle = '#0a0a15';
+  ctx.beginPath();
+  ctx.moveTo(-6, 35); ctx.lineTo(-7, 42); ctx.lineTo(7, 42); ctx.lineTo(7, 35);
+  ctx.closePath();
+  ctx.fill();
+  // Split toe
+  ctx.strokeStyle = '#222840';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 42); ctx.lineTo(0, 38);
+  ctx.stroke();
+  // Toe detail
+  ctx.fillStyle = '#151525';
+  ctx.beginPath();
+  ctx.ellipse(-3, 42, 3, 1.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(3, 42, 3, 1.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  
+  // === BODY / TORSO (Ninja suit) ===
+  ctx.save();
+  ctx.translate(0, by);
+  // Main body
+  ctx.fillStyle = '#1e2538';
+  ctx.beginPath();
+  ctx.moveTo(-14, -22);
+  ctx.lineTo(-15, 18);
+  ctx.lineTo(-10, 22);
+  ctx.lineTo(10, 22);
+  ctx.lineTo(15, 18);
+  ctx.lineTo(14, -22);
+  ctx.closePath();
+  ctx.fill();
+  // Body wrap texture (horizontal lines)
+  ctx.strokeStyle = 'rgba(100,120,150,0.2)';
+  ctx.lineWidth = 0.4;
+  for (let i = 0; i < 10; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-13, -18 + i * 4);
+    ctx.lineTo(13, -17 + i * 4);
+    ctx.stroke();
+  }
+  // Chest armor plate
+  ctx.fillStyle = '#2a3348';
+  ctx.beginPath();
+  ctx.moveTo(-10, -18);
+  ctx.lineTo(-10, 0);
+  ctx.lineTo(10, 0);
+  ctx.lineTo(10, -18);
+  ctx.quadraticCurveTo(0, -22, -10, -18);
+  ctx.closePath();
+  ctx.fill();
+  // Armor trim
+  ctx.strokeStyle = '#5a6a7a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-10, -18);
+  ctx.quadraticCurveTo(0, -22, 10, -18);
+  ctx.lineTo(10, 0);
+  ctx.lineTo(-10, 0);
+  ctx.closePath();
+  ctx.stroke();
+  // Armor highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.beginPath();
+  ctx.ellipse(0, -12, 6, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Utility belt/sash
+  ctx.fillStyle = '#3a2020';
+  ctx.fillRect(-14, 5, 28, 5);
+  // Belt pouches
+  ctx.fillStyle = '#4a3030';
+  for (let i = 0; i < 4; i++) {
+    ctx.fillRect(-10 + i * 6, 3, 4, 7);
+    ctx.strokeStyle = '#6a4040';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(-10 + i * 6, 3, 4, 7);
+  }
+  // Sash knot
+  ctx.fillStyle = '#4a2525';
+  ctx.beginPath();
+  ctx.ellipse(12, 7, 3, 4, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  
+  // === BACK ARM (left arm) ===
+  ctx.save();
+  ctx.translate(-14, -16 + by);
+  ctx.rotate(armLA);
+  // Upper arm (wrapped)
+  ctx.fillStyle = '#1e2538';
+  ctx.beginPath();
+  ctx.moveTo(-3, -2); ctx.lineTo(-5, 14); ctx.lineTo(4, 14); ctx.lineTo(3, -2);
+  ctx.closePath();
+  ctx.fill();
+  // Arm wrap detail
+  ctx.strokeStyle = 'rgba(100,120,150,0.3)';
+  ctx.lineWidth = 0.4;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-4, 1 + i * 3.5);
+    ctx.lineTo(3, 2 + i * 3.5);
+    ctx.stroke();
+  }
+  // Forearm bandages
+  ctx.fillStyle = '#2a2a3a';
+  ctx.beginPath();
+  ctx.ellipse(-1, 20, 4, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Bandage wrap lines
+  ctx.strokeStyle = 'rgba(150,150,170,0.3)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-4, 15 + i * 3);
+    ctx.lineTo(3, 16 + i * 3);
+    ctx.stroke();
+  }
+  // Hand/paw
+  ctx.fillStyle = '#606870';
+  ctx.beginPath();
+  ctx.ellipse(-1, 28, 4, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Claws
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-3 + i * 2.5, 30);
+    ctx.lineTo(-3 + i * 2.5, 33);
+    ctx.stroke();
+  }
+  ctx.restore();
+  
+  // === FRONT ARM (right arm) ===
+  ctx.save();
+  ctx.translate(14, -16 + by);
+  ctx.rotate(armRA);
+  // Upper arm
+  ctx.fillStyle = '#222840';
+  ctx.beginPath();
+  ctx.moveTo(-4, -2); ctx.lineTo(-5, 14); ctx.lineTo(4, 14); ctx.lineTo(3, -2);
+  ctx.closePath();
+  ctx.fill();
+  // Arm wraps
+  ctx.strokeStyle = 'rgba(100,120,150,0.3)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-4, 1 + i * 3.5);
+    ctx.lineTo(4, 1.5 + i * 3.5);
+    ctx.stroke();
+  }
+  // Forearm
+  ctx.fillStyle = '#2e2e40';
+  ctx.beginPath();
+  ctx.ellipse(0, 20, 4.5, 7.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Forearm highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.beginPath();
+  ctx.ellipse(1, 18, 2, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Hand
+  ctx.fillStyle = '#707880';
+  if (state === 'attack' && (attackType === 'lowpunch' || attackType === 'highpunch')) {
+    // Striking hand - extended fingers
+    ctx.beginPath();
+    ctx.moveTo(-3, 27); ctx.lineTo(-4, 34); ctx.lineTo(4, 34); ctx.lineTo(3, 27);
+    ctx.closePath();
+    ctx.fill();
+    // Claws extended
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 0.8;
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-3 + i * 2, 34);
+      ctx.lineTo(-3.5 + i * 2, 38);
+      ctx.stroke();
+    }
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(0, 29, 4.5, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#bbb';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-2 + i * 2, 31);
+      ctx.lineTo(-2 + i * 2, 34);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  
+  // === HEAD ===
+  ctx.save();
+  ctx.translate(0, -32 + by);
+  ctx.rotate(headTilt);
+  // Neck
+  ctx.fillStyle = '#1e2538';
+  ctx.fillRect(-4, 6, 8, 7);
+  // Head - pointed gray face
+  ctx.fillStyle = '#808890';
+  ctx.beginPath();
+  ctx.moveTo(0, 10);
+  ctx.quadraticCurveTo(-16, 5, -15, -5);
+  ctx.quadraticCurveTo(-14, -14, 0, -16);
+  ctx.quadraticCurveTo(14, -14, 15, -5);
+  ctx.quadraticCurveTo(16, 5, 0, 10);
+  ctx.closePath();
+  ctx.fill();
+  // Head highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.beginPath();
+  ctx.ellipse(-4, -10, 7, 5, -0.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Head shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.1)';
+  ctx.beginPath();
+  ctx.ellipse(5, 3, 8, 5, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // Mask pattern (dark across eyes)
+  ctx.fillStyle = '#2a2e33';
+  ctx.beginPath();
+  ctx.moveTo(-15, -3);
+  ctx.quadraticCurveTo(-12, -9, -4, -8);
+  ctx.lineTo(4, -8);
+  ctx.quadraticCurveTo(12, -9, 15, -3);
+  ctx.quadraticCurveTo(12, 2, 4, 1);
+  ctx.lineTo(-4, 1);
+  ctx.quadraticCurveTo(-12, 2, -15, -3);
+  ctx.closePath();
+  ctx.fill();
+  // EARS (large pointed)
+  // Left ear
+  ctx.fillStyle = '#707880';
+  ctx.beginPath();
+  ctx.moveTo(-9, -14); ctx.lineTo(-14, -26); ctx.lineTo(-4, -16);
+  ctx.closePath();
+  ctx.fill();
+  // Left ear inner
+  ctx.fillStyle = '#a0a8b0';
+  ctx.beginPath();
+  ctx.moveTo(-9, -15); ctx.lineTo(-12, -23); ctx.lineTo(-6, -16);
+  ctx.closePath();
+  ctx.fill();
+  // Right ear
+  ctx.fillStyle = '#707880';
+  ctx.beginPath();
+  ctx.moveTo(9, -14); ctx.lineTo(14, -26); ctx.lineTo(4, -16);
+  ctx.closePath();
+  ctx.fill();
+  // Right ear inner
+  ctx.fillStyle = '#a0a8b0';
+  ctx.beginPath();
+  ctx.moveTo(9, -15); ctx.lineTo(12, -23); ctx.lineTo(6, -16);
+  ctx.closePath();
+  ctx.fill();
+  // EYES (glowing green)
+  // Eye glow
+  ctx.fillStyle = 'rgba(0,255,100,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(-6, -4, 6, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(6, -4, 6, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#00ff66';
+  ctx.beginPath();
+  ctx.ellipse(-6, -4, 3.5, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(6, -4, 3.5, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Slit pupils
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(-6, -4, 1, 2.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(6, -4, 1, 2.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Eye highlights
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.beginPath();
+  ctx.ellipse(-5, -5.5, 1, 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(7, -5.5, 1, 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Nose
+  ctx.fillStyle = '#2a2a2a';
+  ctx.beginPath();
+  ctx.ellipse(0, 4, 2.5, 1.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Nose highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(-0.5, 3.5, 1, 0.6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Muzzle whisker dots
+  ctx.fillStyle = '#606870';
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.ellipse(-5 + i * 2.5, 6, 0.6, 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // HEADBAND (red hachimaki)
+  ctx.fillStyle = '#cc2222';
+  ctx.beginPath();
+  ctx.moveTo(-15, -9);
+  ctx.quadraticCurveTo(0, -12, 15, -9);
+  ctx.quadraticCurveTo(0, -7, -15, -9);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#cc2222';
+  ctx.fillRect(-15, -10, 30, 3);
+  // Headband tails (flowing)
+  const tailFlow = Math.sin(animFrame * 0.12) * 3;
+  ctx.fillStyle = '#cc2222';
+  ctx.beginPath();
+  ctx.moveTo(-15, -9);
+  ctx.quadraticCurveTo(-20, -8 + tailFlow, -25, -6 + tailFlow * 1.5);
+  ctx.lineTo(-25, -8 + tailFlow * 1.5);
+  ctx.quadraticCurveTo(-20, -10 + tailFlow, -15, -11);
+  ctx.closePath();
+  ctx.fill();
+  // Second tail
+  ctx.beginPath();
+  ctx.moveTo(-15, -10);
+  ctx.quadraticCurveTo(-22, -12 + tailFlow * 0.5, -28, -10 + tailFlow);
+  ctx.lineTo(-28, -12 + tailFlow);
+  ctx.quadraticCurveTo(-22, -14 + tailFlow * 0.5, -15, -12);
+  ctx.closePath();
+  ctx.fill();
+  
+  ctx.restore();
+}
+
+// ============================================================
+// KARATE DOG - Detailed Drawing (Golden Retriever/Akita mix)
+// ============================================================
+function drawDog(ctx, bodyOffY, armLA, armRA, legLA, legRA, headTilt, crouchSquish, animFrame, state, attackType) {
+  const by = bodyOffY;
+  
+  // === BACK LEG (left leg) ===
+  ctx.save();
+  ctx.translate(-8, 20 + by);
+  ctx.rotate(legLA);
+  // Gi pants - left leg (heavier white fabric)
+  ctx.fillStyle = '#f5f5f0';
+  ctx.beginPath();
+  ctx.moveTo(-7, 0); ctx.lineTo(-9, 20); ctx.lineTo(-10, 42);
+  ctx.lineTo(7, 42); ctx.lineTo(8, 20); ctx.lineTo(6, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Pants shading
+  ctx.fillStyle = 'rgba(0,0,0,0.07)';
+  ctx.beginPath();
+  ctx.moveTo(-9, 2); ctx.lineTo(-10, 40); ctx.lineTo(-4, 40); ctx.lineTo(-3, 2);
+  ctx.closePath();
+  ctx.fill();
+  // Heavy fabric wrinkles at knee
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(-7, 18); ctx.quadraticCurveTo(-2, 21, 5, 18);
+  ctx.moveTo(-8, 22); ctx.quadraticCurveTo(-3, 24, 4, 21);
+  ctx.moveTo(-6, 30); ctx.quadraticCurveTo(-1, 32, 5, 30);
+  ctx.stroke();
+  // Paw-foot with fur
+  ctx.fillStyle = '#c8943c';
+  ctx.beginPath();
+  ctx.ellipse(-1, 45, 8, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Fur tufts on foot
+  ctx.fillStyle = '#daa520';
+  ctx.beginPath();
+  ctx.ellipse(-1, 43, 6, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Toe definition
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-4 + i * 3, 44);
+    ctx.lineTo(-4 + i * 3, 47);
+    ctx.stroke();
+  }
+  ctx.restore();
+  
+  // === FRONT LEG (right leg) ===
+  ctx.save();
+  ctx.translate(8, 20 + by);
+  ctx.rotate(legRA);
+  // Gi pants - right leg
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(-7, 0); ctx.lineTo(-9, 20); ctx.lineTo(-9, 42);
+  ctx.lineTo(8, 42); ctx.lineTo(9, 20); ctx.lineTo(7, 0);
+  ctx.closePath();
+  ctx.fill();
+  // Pants highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillRect(3, 3, 4, 35);
+  // Pants shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.06)';
+  ctx.fillRect(-8, 3, 4, 35);
+  // Heavy fabric wrinkles
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(-6, 10); ctx.quadraticCurveTo(0, 12, 6, 10);
+  ctx.moveTo(-7, 20); ctx.quadraticCurveTo(-1, 22, 6, 19);
+  ctx.moveTo(-7, 25); ctx.quadraticCurveTo(-1, 27, 6, 24);
+  ctx.moveTo(-6, 34); ctx.quadraticCurveTo(0, 36, 6, 33);
+  ctx.stroke();
+  // Stitching line on side
+  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+  ctx.lineWidth = 0.4;
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  ctx.moveTo(6, 2); ctx.lineTo(7, 38);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // Paw-foot
+  ctx.fillStyle = '#daa520';
+  ctx.beginPath();
+  ctx.ellipse(0, 45, 9, 5.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Lighter fur on top
+  ctx.fillStyle = '#e8b844';
+  ctx.beginPath();
+  ctx.ellipse(0, 43, 7, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Toe details
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-4 + i * 3, 44);
+    ctx.lineTo(-4 + i * 3, 48);
+    ctx.stroke();
+  }
+  ctx.restore();
+  
+  // === BODY / TORSO (Karate Gi - heavier/wider) ===
+  ctx.save();
+  ctx.translate(0, by);
+  // Main gi body (wider, heavier than panda's judo gi)
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(-20, -24);
+  ctx.lineTo(-22, 22);
+  ctx.lineTo(-16, 26);
+  ctx.lineTo(16, 26);
+  ctx.lineTo(22, 22);
+  ctx.lineTo(20, -24);
+  ctx.closePath();
+  ctx.fill();
+  // Gi left shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.06)';
+  ctx.beginPath();
+  ctx.moveTo(-20, -24); ctx.lineTo(-22, 22); ctx.lineTo(-14, 22); ctx.lineTo(-14, -24);
+  ctx.closePath();
+  ctx.fill();
+  // Gi right highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.beginPath();
+  ctx.moveTo(12, -20); ctx.lineTo(12, 18); ctx.lineTo(18, 18); ctx.lineTo(18, -20);
+  ctx.closePath();
+  ctx.fill();
+  // Overlapping lapels (wider than panda, proper overlap)
+  // Right lapel (on top)
+  ctx.fillStyle = '#f8f8f8';
+  ctx.beginPath();
+  ctx.moveTo(10, -24);
+  ctx.lineTo(2, 8);
+  ctx.lineTo(-2, 8);
+  ctx.lineTo(-8, -24);
+  ctx.closePath();
+  ctx.fill();
+  // Lapel border
+  ctx.strokeStyle = '#ddd';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(10, -24); ctx.lineTo(2, 8);
+  ctx.moveTo(-8, -24); ctx.lineTo(-2, 8);
+  ctx.stroke();
+  // Stitching lines on lapel
+  ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+  ctx.lineWidth = 0.4;
+  ctx.setLineDash([1.5, 1.5]);
+  ctx.beginPath();
+  ctx.moveTo(8, -22); ctx.lineTo(2.5, 5);
+  ctx.moveTo(-6, -22); ctx.lineTo(-1.5, 5);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // Visible golden chest fur in V
+  ctx.fillStyle = '#daa520';
+  ctx.beginPath();
+  ctx.moveTo(-4, -20);
+  ctx.lineTo(0, 3);
+  ctx.lineTo(4, -20);
+  ctx.closePath();
+  ctx.fill();
+  // Chest fur lighter center
+  ctx.fillStyle = '#f0d070';
+  ctx.beginPath();
+  ctx.moveTo(-2, -16);
+  ctx.lineTo(0, -2);
+  ctx.lineTo(2, -16);
+  ctx.closePath();
+  ctx.fill();
+  // Chest fur texture
+  ctx.strokeStyle = 'rgba(160,100,20,0.2)';
+  ctx.lineWidth = 0.4;
+  for (let i = 0; i < 6; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-1 + Math.random(), -18 + i * 3);
+    ctx.lineTo(0.5, -15 + i * 3);
+    ctx.stroke();
+  }
+  // BLACK BELT with TWO RED STRIPES
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(-20, 10, 40, 6);
+  // Belt highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.fillRect(-20, 10, 40, 2);
+  // TWO red rank stripes
+  ctx.fillStyle = '#cc2222';
+  ctx.fillRect(-18, 14, 6, 1.5);
+  ctx.fillRect(-18, 12, 6, 1.5);
+  // Belt knot
+  ctx.fillStyle = '#222';
+  ctx.beginPath();
+  ctx.ellipse(0, 13, 4, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Belt tail
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.moveTo(2, 14); ctx.lineTo(5, 22); ctx.lineTo(3, 22); ctx.lineTo(0, 15);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-2, 14); ctx.lineTo(-4, 20); ctx.lineTo(-2, 20); ctx.lineTo(0, 15);
+  ctx.closePath();
+  ctx.fill();
+  // Torso wrinkles
+  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(-16, -8); ctx.quadraticCurveTo(-10, -6, -5, -8);
+  ctx.moveTo(5, -6); ctx.quadraticCurveTo(11, -4, 16, -6);
+  ctx.moveTo(-14, 3); ctx.quadraticCurveTo(-7, 5, 0, 3);
+  ctx.stroke();
+  ctx.restore();
+  
+  // === BACK ARM (left arm) ===
+  ctx.save();
+  ctx.translate(-19, -16 + by);
+  ctx.rotate(armLA);
+  // Gi sleeve (wide, ends above forearm)
+  ctx.fillStyle = '#f0f0f0';
+  ctx.beginPath();
+  ctx.moveTo(-5, -3); ctx.lineTo(-8, 14); ctx.lineTo(6, 14); ctx.lineTo(5, -3);
+  ctx.closePath();
+  ctx.fill();
+  // Sleeve shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.07)';
+  ctx.fillRect(-7, 0, 4, 13);
+  // Sleeve opening
+  ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(-7, 14); ctx.lineTo(5, 14);
+  ctx.stroke();
+  // Powerful forearm (golden fur)
+  ctx.fillStyle = '#c8943c';
+  ctx.beginPath();
+  ctx.ellipse(-1, 21, 5, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Forearm highlight
+  ctx.fillStyle = '#daa520';
+  ctx.beginPath();
+  ctx.ellipse(1, 19, 3, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Forearm muscle line
+  ctx.strokeStyle = 'rgba(150,90,20,0.2)';
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.arc(-1, 20, 3.5, -0.5, 2);
+  ctx.stroke();
+  // Paw
+  ctx.fillStyle = '#c8943c';
+  ctx.beginPath();
+  ctx.ellipse(-1, 30, 5.5, 4.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Paw lighter pads
+  ctx.fillStyle = '#e8b844';
+  ctx.beginPath();
+  ctx.ellipse(-1, 31, 3, 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Finger definition
+  ctx.strokeStyle = 'rgba(100,60,10,0.2)';
+  ctx.lineWidth = 0.4;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-3 + i * 2.5, 28);
+    ctx.lineTo(-3 + i * 2.5, 32);
+    ctx.stroke();
+  }
+  ctx.restore();
+  
+  // === FRONT ARM (right arm) ===
+  ctx.save();
+  ctx.translate(19, -16 + by);
+  ctx.rotate(armRA);
+  // Wide gi sleeve
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(-6, -3); ctx.lineTo(-8, 14); ctx.lineTo(7, 14); ctx.lineTo(6, -3);
+  ctx.closePath();
+  ctx.fill();
+  // Sleeve wrinkles
+  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(-5, 3); ctx.quadraticCurveTo(0, 5, 5, 3);
+  ctx.moveTo(-6, 8); ctx.quadraticCurveTo(0, 10, 5, 8);
+  ctx.stroke();
+  // Stitching on sleeve
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+  ctx.lineWidth = 0.3;
+  ctx.setLineDash([1, 1.5]);
+  ctx.beginPath();
+  ctx.moveTo(5, 0); ctx.lineTo(6, 13);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // Powerful forearm
+  ctx.fillStyle = '#daa520';
+  ctx.beginPath();
+  ctx.ellipse(0, 21, 5.5, 8.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Forearm lighter
+  ctx.fillStyle = '#e8c050';
+  ctx.beginPath();
+  ctx.ellipse(1, 19, 3, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Muscle definition
+  ctx.strokeStyle = 'rgba(150,90,20,0.2)';
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  ctx.arc(0, 20, 4, -0.5, 2);
+  ctx.stroke();
+  // Paw/fist
+  ctx.fillStyle = '#daa520';
+  if (state === 'attack' && (attackType === 'lowpunch' || attackType === 'highpunch')) {
+    // Fist
+    ctx.beginPath();
+    ctx.ellipse(0, 31, 6.5, 5.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#c8943c';
+    ctx.beginPath();
+    ctx.ellipse(0, 32, 4, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Knuckle lines
+    ctx.strokeStyle = 'rgba(100,60,10,0.3)';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-4 + i * 2.5, 28);
+      ctx.lineTo(-4 + i * 2.5, 30);
+      ctx.stroke();
+    }
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(0, 31, 6, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#e8c050';
+    ctx.beginPath();
+    ctx.ellipse(0, 32, 3.5, 2.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(100,60,10,0.2)';
+    ctx.lineWidth = 0.4;
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-4 + i * 2.5, 29);
+      ctx.lineTo(-4 + i * 2.5, 33);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  
+  // === HEAD ===
+  ctx.save();
+  ctx.translate(0, -34 + by);
+  ctx.rotate(headTilt);
+  // Neck with golden fur
+  ctx.fillStyle = '#c8943c';
+  ctx.fillRect(-6, 7, 12, 9);
+  ctx.fillStyle = '#daa520';
+  ctx.fillRect(-4, 8, 8, 7);
+  // Head - round with slight muzzle
+  ctx.fillStyle = '#daa520';
+  ctx.beginPath();
+  ctx.ellipse(0, -4, 17, 15, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Head highlight
+  ctx.fillStyle = 'rgba(255,255,200,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(-5, -10, 8, 6, -0.2, 0, Math.PI * 2);
+  ctx.fill();
+  // Head shadow
+  ctx.fillStyle = 'rgba(150,90,20,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(5, 4, 10, 8, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // Lighter muzzle area
+  ctx.fillStyle = '#f0d880';
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 9, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Even lighter center muzzle
+  ctx.fillStyle = '#f8e8a0';
+  ctx.beginPath();
+  ctx.ellipse(0, 4, 6, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // FLOPPY EARS (bounce during animation)
+  const earBounce = Math.sin(animFrame * 0.15) * 2;
+  // Left ear
+  ctx.fillStyle = '#c8943c';
+  ctx.beginPath();
+  ctx.moveTo(-12, -8);
+  ctx.quadraticCurveTo(-18, -4, -19, 4 + earBounce);
+  ctx.quadraticCurveTo(-17, 8 + earBounce, -13, 2 + earBounce * 0.5);
+  ctx.quadraticCurveTo(-11, -2, -10, -6);
+  ctx.closePath();
+  ctx.fill();
+  // Left ear inner
+  ctx.fillStyle = '#b07828';
+  ctx.beginPath();
+  ctx.moveTo(-12, -5);
+  ctx.quadraticCurveTo(-16, -1, -16, 3 + earBounce);
+  ctx.quadraticCurveTo(-14, 5 + earBounce, -12, 1 + earBounce * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  // Right ear
+  ctx.fillStyle = '#c8943c';
+  ctx.beginPath();
+  ctx.moveTo(12, -8);
+  ctx.quadraticCurveTo(18, -4, 19, 4 + earBounce);
+  ctx.quadraticCurveTo(17, 8 + earBounce, 13, 2 + earBounce * 0.5);
+  ctx.quadraticCurveTo(11, -2, 10, -6);
+  ctx.closePath();
+  ctx.fill();
+  // Right ear inner
+  ctx.fillStyle = '#b07828';
+  ctx.beginPath();
+  ctx.moveTo(12, -5);
+  ctx.quadraticCurveTo(16, -1, 16, 3 + earBounce);
+  ctx.quadraticCurveTo(14, 5 + earBounce, 12, 1 + earBounce * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  // EYES (expressive brown)
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(-6, -4, 4, 4.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(6, -4, 4, 4.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Iris (brown)
+  ctx.fillStyle = '#5c3010';
+  ctx.beginPath();
+  ctx.ellipse(-6, -3.5, 2.8, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(6, -3.5, 2.8, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Pupils
+  ctx.fillStyle = '#1a0a00';
+  ctx.beginPath();
+  ctx.ellipse(-6, -3.5, 1.5, 1.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(6, -3.5, 1.5, 1.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Eye highlights
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(-5, -5, 1.2, 1, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(7, -5, 1.2, 1, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Eyebrows (fur ridges)
+  ctx.strokeStyle = '#a07020';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-10, -8); ctx.quadraticCurveTo(-6, -10, -3, -8);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(3, -8); ctx.quadraticCurveTo(6, -10, 10, -8);
+  ctx.stroke();
+  // NOSE (black, prominent)
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 3.5, 2.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Nose highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(-0.8, 2.2, 1.5, 1, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Mouth/tongue (visible when idle)
+  if (state === 'idle') {
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(-4, 6);
+    ctx.quadraticCurveTo(0, 9, 4, 6);
+    ctx.stroke();
+    // Tongue
+    ctx.fillStyle = '#e05555';
+    ctx.beginPath();
+    ctx.ellipse(1, 8, 2.5, 2, 0.1, 0, Math.PI);
+    ctx.fill();
+    // Tongue center line
+    ctx.strokeStyle = '#c04040';
+    ctx.lineWidth = 0.4;
+    ctx.beginPath();
+    ctx.moveTo(1, 7); ctx.lineTo(1, 10);
+    ctx.stroke();
+  } else {
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(-3, 6);
+    ctx.quadraticCurveTo(0, 7, 3, 6);
+    ctx.stroke();
+  }
+  // HEADBAND (Red with white rising sun)
+  ctx.fillStyle = '#cc2222';
+  ctx.beginPath();
+  ctx.moveTo(-17, -12);
+  ctx.quadraticCurveTo(0, -15, 17, -12);
+  ctx.lineTo(17, -9);
+  ctx.quadraticCurveTo(0, -12, -17, -9);
+  ctx.closePath();
+  ctx.fill();
+  // Rising sun circle (white)
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(0, -11, 3, 2.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Sun rays (subtle)
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 0.4;
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(angle) * 3, -11 + Math.sin(angle) * 2.5);
+    ctx.lineTo(Math.cos(angle) * 4.5, -11 + Math.sin(angle) * 3.5);
+    ctx.stroke();
+  }
+  // Headband tails
+  const htFlow = Math.sin(animFrame * 0.1) * 2;
+  ctx.fillStyle = '#cc2222';
+  ctx.beginPath();
+  ctx.moveTo(-17, -11);
+  ctx.quadraticCurveTo(-22, -10 + htFlow, -26, -8 + htFlow * 1.2);
+  ctx.lineTo(-26, -10 + htFlow * 1.2);
+  ctx.quadraticCurveTo(-22, -12 + htFlow, -17, -13);
+  ctx.closePath();
+  ctx.fill();
+  
+  ctx.restore();
+}
+
+// ============================================================
+// BACKGROUND - Market Scene with Sunset
+// ============================================================
+function drawBackground() {
+  // Sunset sky gradient
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, 300);
+  skyGrad.addColorStop(0, '#1a0a2e');
+  skyGrad.addColorStop(0.3, '#4a1942');
+  skyGrad.addColorStop(0.5, '#c2185b');
+  skyGrad.addColorStop(0.7, '#ff6f00');
+  skyGrad.addColorStop(1, '#ffab00');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, 350);
+  
+  // Sun
+  ctx.fillStyle = '#ff8f00';
+  ctx.beginPath();
+  ctx.ellipse(480, 180, 50, 50, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,200,0,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(480, 180, 70, 70, 0, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Clouds
+  ctx.fillStyle = 'rgba(100,20,60,0.4)';
+  for (let i = 0; i < 5; i++) {
+    ctx.beginPath();
+    ctx.ellipse(100 + i * 200 + Math.sin(frameCount * 0.003 + i) * 20, 80 + i * 20, 80, 20, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  
+  // Distant pagodas
+  ctx.fillStyle = '#2a0a1a';
+  // Left pagoda
+  for (let i = 0; i < 5; i++) {
+    const pw = 40 - i * 6;
+    const py = 200 - i * 25;
+    ctx.fillRect(80 - pw/2, py, pw, 20);
+    // Eaves
+    ctx.beginPath();
+    ctx.moveTo(80 - pw/2 - 5, py);
+    ctx.lineTo(80, py - 5);
+    ctx.lineTo(80 + pw/2 + 5, py);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Right pagoda
+  for (let i = 0; i < 4; i++) {
+    const pw = 35 - i * 5;
+    const py = 220 - i * 25;
+    ctx.fillRect(850 - pw/2, py, pw, 20);
+    ctx.beginPath();
+    ctx.moveTo(850 - pw/2 - 4, py);
+    ctx.lineTo(850, py - 4);
+    ctx.lineTo(850 + pw/2 + 4, py);
+    ctx.closePath();
+    ctx.fill();
+  }
+  
+  // Mountains
+  ctx.fillStyle = '#1a0520';
+  ctx.beginPath();
+  ctx.moveTo(0, 280);
+  ctx.lineTo(150, 180); ctx.lineTo(300, 260); ctx.lineTo(450, 190);
+  ctx.lineTo(600, 250); ctx.lineTo(750, 200); ctx.lineTo(960, 270);
+  ctx.lineTo(960, 350); ctx.lineTo(0, 350);
+  ctx.closePath();
+  ctx.fill();
+  
+  // Ground area
+  ctx.fillStyle = '#2a1a0a';
+  ctx.fillRect(0, 340, W, 200);
+  
+  // Ground tiles
+  ctx.strokeStyle = 'rgba(100,70,30,0.3)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 40) {
+    ctx.beginPath();
+    ctx.moveTo(x, 340); ctx.lineTo(x, 540);
+    ctx.stroke();
+  }
+  for (let y = 340; y < 540; y += 30) {
+    ctx.beginPath();
+    ctx.moveTo(0, y); ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+  // Tile highlight
+  ctx.fillStyle = 'rgba(200,150,80,0.05)';
+  for (let x = 0; x < W; x += 80) {
+    for (let y = 340; y < 540; y += 60) {
+      ctx.fillRect(x, y, 40, 30);
+    }
+  }
+  
+  // Market stalls (background)
+  drawMarketStall(50, 280, '#8b4513');
+  drawMarketStall(200, 285, '#6b3510');
+  drawMarketStall(700, 282, '#7b4020');
+  drawMarketStall(850, 288, '#6b3010');
+  
+  // Lanterns (hanging)
+  for (let i = 0; i < 8; i++) {
+    drawLantern(60 + i * 120, 260 + Math.sin(i * 1.3) * 15);
+  }
+  
+  // Crowd NPCs (background)
+  for (let i = 0; i < 12; i++) {
+    drawCrowdNPC(40 + i * 80, 320 + (i % 3) * 8, i);
+  }
+}
+
+function drawMarketStall(x, y, color) {
+  // Stall structure
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, 60, 40);
+  // Roof
+  ctx.fillStyle = '#4a2510';
+  ctx.beginPath();
+  ctx.moveTo(x - 5, y);
+  ctx.lineTo(x + 30, y - 15);
+  ctx.lineTo(x + 65, y);
+  ctx.closePath();
+  ctx.fill();
+  // Curtain/banner
+  ctx.fillStyle = '#cc3333';
+  ctx.fillRect(x + 5, y, 2, 20);
+  ctx.fillRect(x + 53, y, 2, 20);
+  // Items on display
+  ctx.fillStyle = '#ffcc00';
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.ellipse(x + 15 + i * 15, y + 30, 4, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawLantern(x, y) {
+  const glow = Math.sin(frameCount * 0.05 + x) * 0.2 + 0.8;
+  // Glow
+  ctx.fillStyle = `rgba(255,100,0,${0.1 * glow})`;
+  ctx.beginPath();
+  ctx.ellipse(x, y, 15, 15, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // String
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 12); ctx.lineTo(x, y - 20);
+  ctx.stroke();
+  // Lantern body
+  ctx.fillStyle = `rgba(255,50,0,${0.7 * glow})`;
+  ctx.beginPath();
+  ctx.ellipse(x, y, 6, 9, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Lantern highlight
+  ctx.fillStyle = `rgba(255,200,100,${0.3 * glow})`;
+  ctx.beginPath();
+  ctx.ellipse(x - 1, y - 2, 3, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Top/bottom caps
+  ctx.fillStyle = '#8b4513';
+  ctx.fillRect(x - 3, y - 9, 6, 2);
+  ctx.fillRect(x - 2, y + 7, 4, 2);
+}
+
+function drawCrowdNPC(x, y, idx) {
+  const colors = ['#445566', '#665544', '#554466', '#446655', '#664455', '#556644'];
+  const headColors = ['#deb887', '#d2691e', '#f5deb3', '#bc8f8f', '#daa520', '#cd853f'];
+  ctx.fillStyle = colors[idx % colors.length];
+  ctx.fillRect(x - 5, y, 10, 18);
+  ctx.fillStyle = headColors[idx % headColors.length];
+  ctx.beginPath();
+  ctx.ellipse(x, y - 3, 5, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Simple animation
+  const bob = Math.sin(frameCount * 0.03 + idx * 2) * 1;
+  ctx.fillStyle = colors[idx % colors.length];
+  ctx.fillRect(x - 5, y + bob, 10, 18);
+  ctx.fillStyle = headColors[idx % headColors.length];
+  ctx.beginPath();
+  ctx.ellipse(x, y - 3 + bob, 5, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ============================================================
+// UI ELEMENTS - Health Bars, Timer, Portraits
+// ============================================================
+function drawHealthBars() {
+  // P1 Health bar background
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(130, 20, 320, 28);
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(130, 20, 320, 28);
+  
+  // P1 Health bar (right-aligned, depletes left)
+  const p1Pct = Math.max(0, p1.hp / p1.maxHp);
+  const p1Color = p1Pct > 0.5 ? '#00cc44' : p1Pct > 0.25 ? '#ccaa00' : '#cc2200';
+  ctx.fillStyle = p1Color;
+  ctx.fillRect(130, 22, 316 * p1Pct, 24);
+  // Health bar shine
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.fillRect(130, 22, 316 * p1Pct, 8);
+  // Damage flash
+  if (p1.hitTimer > 0) {
+    ctx.fillStyle = 'rgba(255,0,0,0.3)';
+    ctx.fillRect(130, 20, 320, 28);
+  }
+  
+  // P2 Health bar background
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(510, 20, 320, 28);
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(510, 20, 320, 28);
+  
+  // P2 Health bar
+  const p2Pct = Math.max(0, p2.hp / p2.maxHp);
+  const p2Color = p2Pct > 0.5 ? '#00cc44' : p2Pct > 0.25 ? '#ccaa00' : '#cc2200';
+  ctx.fillStyle = p2Color;
+  ctx.fillRect(510 + 316 * (1 - p2Pct), 22, 316 * p2Pct, 24);
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.fillRect(510 + 316 * (1 - p2Pct), 22, 316 * p2Pct, 8);
+  if (p2.hitTimer > 0) {
+    ctx.fillStyle = 'rgba(255,0,0,0.3)';
+    ctx.fillRect(510, 20, 320, 28);
+  }
+  
+  // Player portraits (small)
+  ctx.fillStyle = '#222';
+  ctx.fillRect(20, 10, 100, 45);
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, 10, 100, 45);
+  
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(22, 12, 96, 41);
+  ctx.clip();
+  drawCharacterPortrait(ctx, p1.char, 70, 52, 0.6, { facing: 1, state: 'idle', animFrame: frameCount });
+  ctx.restore();
+  
+  ctx.fillStyle = '#222';
+  ctx.fillRect(840, 10, 100, 45);
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(840, 10, 100, 45);
+  
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(842, 12, 96, 41);
+  ctx.clip();
+  drawCharacterPortrait(ctx, p2.char, 890, 52, 0.6, { facing: -1, state: 'idle', animFrame: frameCount });
+  ctx.restore();
+  
+  // Names
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(CHARS[p1.char].name, 132, 62);
+  ctx.textAlign = 'right';
+  ctx.fillText(CHARS[p2.char].name, 828, 62);
+  ctx.textAlign = 'left';
+  
+  // Win markers
+  for (let i = 0; i < p1.wins; i++) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.ellipse(135 + i * 18, 58, 5, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let i = 0; i < p2.wins; i++) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.ellipse(825 - i * 18, 58, 5, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  
+  // Timer
+  ctx.fillStyle = '#000';
+  ctx.fillRect(455, 10, 50, 40);
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(455, 10, 50, 40);
+  ctx.fillStyle = roundTimer <= 10 ? '#ff3333' : '#ffffff';
+  ctx.font = 'bold 24px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(Math.ceil(roundTimer).toString(), 480, 40);
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// PARTICLES AND EFFECTS
+// ============================================================
+function addHitParticles(x, y, count, color) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: x, y: y,
+      vx: (Math.random() - 0.5) * 8,
+      vy: (Math.random() - 0.5) * 8 - 3,
+      life: 20 + Math.random() * 15,
+      maxLife: 35,
+      color: color || '#ffcc00',
+      size: 2 + Math.random() * 4,
+      type: 'hit'
+    });
+  }
+}
+
+function addDustParticles(x, y) {
+  for (let i = 0; i < 5; i++) {
+    particles.push({
+      x: x + (Math.random() - 0.5) * 20,
+      y: y,
+      vx: (Math.random() - 0.5) * 3,
+      vy: -Math.random() * 2,
+      life: 15 + Math.random() * 10,
+      maxLife: 25,
+      color: '#aa8855',
+      size: 3 + Math.random() * 5,
+      type: 'dust'
+    });
+  }
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.3;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    if (p.type === 'hit') {
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.size, p.size, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Glow
+      ctx.fillStyle = `rgba(255,255,200,${alpha * 0.3})`;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.size * 2, p.size * 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (p.type === 'dust') {
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.size, p.size * 0.7, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// INTRO SCREEN
+// ============================================================
+function updateIntro() {
+  introTimer++;
+  if (introTimer < 60) introPhase = 0;
+  else if (introTimer < 120) introPhase = 1;
+  else if (introTimer < 180) introPhase = 2;
+  else introPhase = 3;
+  
+  if (introPhase >= 3 && (keys['Enter'] || keys[' '])) {
+    gameState = STATE.SELECT;
+    startMusic('select');
+    keys['Enter'] = false;
+    keys[' '] = false;
+  }
+}
+
+function drawIntro() {
+  // Dark background
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Flames effect at bottom
+  for (let i = 0; i < 30; i++) {
+    const fx = i * 32 + Math.sin(frameCount * 0.05 + i) * 10;
+    const fh = 50 + Math.sin(frameCount * 0.08 + i * 0.7) * 30;
+    const grad = ctx.createLinearGradient(fx, H, fx, H - fh);
+    grad.addColorStop(0, 'rgba(255,100,0,0.8)');
+    grad.addColorStop(0.5, 'rgba(255,50,0,0.4)');
+    grad.addColorStop(1, 'rgba(255,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(fx - 15, H);
+    ctx.quadraticCurveTo(fx, H - fh, fx + 15, H);
+    ctx.fill();
+  }
+  
+  // Phase-based reveal
+  if (introPhase >= 0) {
+    // Title background glow
+    const glowSize = Math.min(1, introTimer / 60);
+    ctx.fillStyle = `rgba(200,0,0,${0.2 * glowSize})`;
+    ctx.beginPath();
+    ctx.ellipse(480, 200, 300 * glowSize, 100 * glowSize, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  
+  if (introPhase >= 1) {
+    // Title text
+    const titleScale = Math.min(1.2, (introTimer - 60) / 30);
+    ctx.save();
+    ctx.translate(480, 180);
+    ctx.scale(titleScale, titleScale);
+    ctx.font = 'bold 52px monospace';
+    ctx.textAlign = 'center';
+    // Text shadow
+    ctx.fillStyle = '#880000';
+    ctx.fillText('ANIMAL FIGHTERS', 3, 3);
+    // Main text
+    ctx.fillStyle = '#ff3333';
+    ctx.fillText('ANIMAL FIGHTERS', 0, 0);
+    // Text highlight
+    ctx.fillStyle = 'rgba(255,200,100,0.4)';
+    ctx.fillText('ANIMAL FIGHTERS', 0, -2);
+    ctx.restore();
+  }
+  
+  if (introPhase >= 2) {
+    // Subtitle
+    ctx.font = 'bold 22px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillText('ULTIMATE SHOWDOWN', 480, 230);
+    
+    // Character silhouettes
+    const silAlpha = Math.min(1, (introTimer - 120) / 30);
+    ctx.globalAlpha = silAlpha;
+    drawCharacterPortrait(ctx, 0, 200, 400, 1.5, { facing: 1, state: 'idle', animFrame: frameCount });
+    drawCharacterPortrait(ctx, 1, 480, 400, 1.5, { facing: 1, state: 'idle', animFrame: frameCount });
+    drawCharacterPortrait(ctx, 2, 760, 400, 1.5, { facing: -1, state: 'idle', animFrame: frameCount });
+    ctx.globalAlpha = 1;
+  }
+  
+  if (introPhase >= 3) {
+    // Press start blinking
+    if (Math.floor(frameCount / 30) % 2 === 0) {
+      ctx.font = 'bold 18px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('PRESS ENTER TO START', 480, 500);
+    }
+  }
+  
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// CHARACTER SELECT SCREEN
+// ============================================================
+function updateSelect() {
+  if (!selectConfirmed) {
+    if (keys['ArrowLeft'] || keys['a']) { selectCursor = (selectCursor + 2) % 3; keys['ArrowLeft'] = false; keys['a'] = false; playSFX('select'); }
+    if (keys['ArrowRight'] || keys['d']) { selectCursor = (selectCursor + 1) % 3; keys['ArrowRight'] = false; keys['d'] = false; playSFX('select'); }
+    if (keys['Enter'] || keys[' ']) {
+      selectConfirmed = true;
+      p1.char = selectCursor;
+      // AI picks a different character
+      do { p2Char = Math.floor(Math.random() * 3); } while (p2Char === selectCursor);
+      p2.char = p2Char;
+      playSFX('confirm');
+      keys['Enter'] = false;
+      keys[' '] = false;
+      setTimeout(() => {
+        startFight();
+      }, 1500);
+    }
+  }
+}
+
+function drawSelect() {
+  // Background
+  ctx.fillStyle = '#0a0a20';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Background pattern (hex grid subtle)
+  ctx.strokeStyle = 'rgba(100,100,200,0.1)';
+  ctx.lineWidth = 0.5;
+  for (let row = 0; row < 15; row++) {
+    for (let col = 0; col < 20; col++) {
+      const hx = col * 50 + (row % 2) * 25;
+      const hy = row * 40;
+      drawHexagon(hx, hy, 22);
+    }
+  }
+  
+  // Title
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffcc00';
+  ctx.fillText('SELECT YOUR FIGHTER', 480, 40);
+  
+  // Character cards
+  for (let i = 0; i < 3; i++) {
+    const cx = 160 + i * 320;
+    const cy = 290;
+    const selected = i === selectCursor;
+    const confirmed = selectConfirmed && i === selectCursor;
+    
+    // Card background
+    ctx.fillStyle = selected ? 'rgba(50,50,100,0.8)' : 'rgba(20,20,40,0.8)';
+    ctx.fillRect(cx - 110, cy - 180, 220, 360);
+    
+    // Gold border for selected
+    ctx.strokeStyle = selected ? '#ffcc00' : '#444466';
+    ctx.lineWidth = selected ? 3 : 1;
+    ctx.strokeRect(cx - 110, cy - 180, 220, 360);
+    
+    // Confirmed flash
+    if (confirmed && Math.floor(frameCount / 8) % 2 === 0) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(cx - 112, cy - 182, 224, 364);
+    }
+    
+    // Character portrait (large)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx - 105, cy - 175, 210, 250);
+    ctx.clip();
+    drawCharacterPortrait(ctx, i, cx, cy + 40, 2.5, { facing: 1, state: 'idle', animFrame: frameCount, breathe: Math.sin(frameCount * 0.04 + i) * 2 });
+    ctx.restore();
+    
+    // Name plate
+    ctx.fillStyle = '#1a1a2a';
+    ctx.fillRect(cx - 100, cy + 90, 200, 35);
+    ctx.strokeStyle = selected ? '#ffcc00' : '#333355';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx - 100, cy + 90, 200, 35);
+    
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = selected ? '#ffcc00' : '#aaaacc';
+    ctx.fillText(CHARS[i].name, cx, cy + 112);
+    
+    // Stats
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    const stats = ['SPD', 'PWR', 'DEF'];
+    const vals = [CHARS[i].speed, CHARS[i].power, CHARS[i].defense];
+    for (let s = 0; s < 3; s++) {
+      const sy = cy + 135 + s * 16;
+      ctx.fillStyle = '#888';
+      ctx.fillText(stats[s], cx - 90, sy);
+      // Stat bar background
+      ctx.fillStyle = '#222';
+      ctx.fillRect(cx - 55, sy - 8, 140, 10);
+      // Stat bar fill
+      const statColor = s === 0 ? '#00aaff' : s === 1 ? '#ff4444' : '#44cc44';
+      ctx.fillStyle = statColor;
+      ctx.fillRect(cx - 55, sy - 8, 140 * (vals[s] / 10), 10);
+      // Stat bar border
+      ctx.strokeStyle = '#555';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(cx - 55, sy - 8, 140, 10);
+    }
+  }
+  
+  // Style name
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('Style: ' + CHARS[selectCursor].style, 480, 505);
+  
+  // Instructions
+  if (!selectConfirmed) {
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#888';
+    ctx.fillText('< LEFT/RIGHT to select | ENTER to confirm >', 480, 530);
+  }
+  
+  ctx.textAlign = 'left';
+}
+
+function drawHexagon(x, y, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    const px = x + r * Math.cos(angle);
+    const py = y + r * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.stroke();
+}
+
+// ============================================================
+// FIGHT LOGIC
+// ============================================================
+function startFight() {
+  gameState = STATE.FIGHT;
+  p1.x = 250; p1.y = 380; p1.hp = CHARS[p1.char].hp; p1.maxHp = CHARS[p1.char].hp;
+  p1.vx = 0; p1.vy = 0; p1.state = 'idle'; p1.facing = 1;
+  p1.attackTimer = 0; p1.hitTimer = 0; p1.blockTimer = 0;
+  p1.jumpY = 0; p1.crouching = false; p1.comboCount = 0;
+  p1.attackAnimFrame = 0; p1._hitRegistered = false; p1.attackType = '';
+  
+  p2.x = 710; p2.y = 380; p2.hp = CHARS[p2.char].hp; p2.maxHp = CHARS[p2.char].hp;
+  p2.vx = 0; p2.vy = 0; p2.state = 'idle'; p2.facing = -1;
+  p2.attackTimer = 0; p2.hitTimer = 0; p2.blockTimer = 0;
+  p2.jumpY = 0; p2.crouching = false; p2.comboCount = 0;
+  p2.attackAnimFrame = 0; p2._hitRegistered = false; p2.attackType = '';
+  
+  roundTimer = 99;
+  roundTimerFrame = 0;
+  roundStartTimer = 120;
+  roundOver = false;
+  particles = [];
+  screenShake = 0;
+  
+  stopMusic();
+  startMusic('fight');
+  playSFX('round');
+}
+
+function updateFight() {
+  if (roundStartTimer > 0) {
+    roundStartTimer--;
+    return;
+  }
+  
+  if (roundOver) {
+    gameOverTimer++;
+    if (gameOverTimer > 120) {
+      if (p1.wins >= 2 || p2.wins >= 2) {
+        gameState = STATE.GAMEOVER;
+        winner = p1.wins >= 2 ? 'P1' : 'P2';
+        stopMusic();
+      } else {
+        roundNum++;
+        startFight();
+      }
+    }
+    return;
+  }
+  
+  // Timer
+  roundTimerFrame++;
+  if (roundTimerFrame >= 60) {
+    roundTimerFrame = 0;
+    roundTimer--;
+    if (roundTimer <= 0) {
+      endRound();
+      return;
+    }
+  }
+  
+  // Player input
+  handlePlayerInput();
+  
+  // AI
+  handleAI();
+  
+  // Physics
+  updateFighter(p1);
+  updateFighter(p2);
+  
+  // Facing
+  if (p1.x < p2.x) { p1.facing = 1; p2.facing = -1; }
+  else { p1.facing = -1; p2.facing = 1; }
+  
+  // Collision detection
+  checkAttackCollision(p1, p2);
+  checkAttackCollision(p2, p1);
+  
+  // Boundaries
+  p1.x = Math.max(40, Math.min(W - 40, p1.x));
+  p2.x = Math.max(40, Math.min(W - 40, p2.x));
+  
+  // Push apart if overlapping
+  const dist = Math.abs(p1.x - p2.x);
+  if (dist < 50) {
+    const push = (50 - dist) / 2;
+    if (p1.x < p2.x) { p1.x -= push; p2.x += push; }
+    else { p1.x += push; p2.x -= push; }
+  }
+  
+  // Check KO
+  if (p1.hp <= 0) { p1.hp = 0; p1.state = 'ko'; endRound(); }
+  if (p2.hp <= 0) { p2.hp = 0; p2.state = 'ko'; endRound(); }
+  
+  // Update particles
+  updateParticles();
+  
+  // Screen shake decay
+  if (screenShake > 0) screenShake *= 0.85;
+  
+  // Animation frame
+  p1.animFrame++;
+  p2.animFrame++;
+}
+
+function updateFighter(f) {
+  // Gravity for jumps
+  if (f.jumpY < 0) {
+    f.vy += 0.8;
+    f.jumpY += f.vy;
+    if (f.jumpY >= 0) {
+      f.jumpY = 0;
+      f.vy = 0;
+      if (f.state === 'jump') f.state = 'idle';
+      // Don't override attack state on landing
+      if (f.state !== 'attack') addDustParticles(f.x, f.y + 60);
+      else addDustParticles(f.x, f.y + 60);
+    }
+  }
+  
+  // Movement
+  f.x += f.vx;
+  f.vx *= 0.8;
+  
+  // Attack timer
+  if (f.attackTimer > 0) {
+    f.attackTimer--;
+    f.attackAnimFrame = (f.attackAnimFrame || 0) + 1;
+    if (f.attackTimer <= 0) {
+      f.state = 'idle';
+      f.attackType = '';
+      f.attackAnimFrame = 0;
+      f._hitRegistered = false;
+    }
+  }
+  
+  // Hit stun
+  if (f.hitTimer > 0) {
+    f.hitTimer--;
+    if (f.hitTimer <= 0 && f.state === 'hit') f.state = 'idle';
+  }
+  
+  // Block timer
+  if (f.blockTimer > 0) {
+    f.blockTimer--;
+    if (f.blockTimer <= 0 && f.state === 'block') f.state = 'idle';
+  }
+}
+
+function handlePlayerInput() {
+  if (p1.state === 'ko' || p1.hitTimer > 0) return;
+  
+  const speed = CHARS[p1.char].speed * 0.5;
+  let moving = false;
+  
+  // Crouching
+  p1.crouching = keys['ArrowDown'] || false;
+  
+  if (p1.attackTimer <= 0) {
+    // Movement (not while jumping)
+    if (p1.state !== 'jump') {
+      if (keys['ArrowLeft']) { p1.vx = -speed; moving = true; }
+      if (keys['ArrowRight']) { p1.vx = speed; moving = true; }
+    }
+    
+    // Jump
+    if (keys['ArrowUp'] && p1.jumpY >= 0 && p1.state !== 'jump') {
+      p1.jumpY = -1;
+      p1.vy = -14;
+      p1.state = 'jump';
+      addDustParticles(p1.x, p1.y + 60);
+    }
+    
+    // Attacks (allowed on ground and in air)
+    if (keys['a']) { performAttack(p1, 'lowkick'); keys['a'] = false; }
+    else if (keys['s']) { performAttack(p1, 'highkick'); keys['s'] = false; }
+    else if (keys['d']) { performAttack(p1, 'lowpunch'); keys['d'] = false; }
+    else if (keys['f']) { performAttack(p1, 'highpunch'); keys['f'] = false; }
+    else if (keys[' '] && p1.state !== 'jump') {
+      p1.state = 'block';
+      p1.blockTimer = 20;
+    }
+    
+    if (moving && p1.state !== 'attack' && p1.state !== 'jump') p1.state = 'walk';
+    else if (!moving && p1.state === 'walk') p1.state = 'idle';
+  }
+}
+
+function performAttack(fighter, type) {
+  fighter.state = 'attack';
+  fighter.attackType = type;
+  const charSpeed = CHARS[fighter.char].speed;
+  fighter.attackTimer = Math.max(14, 25 - charSpeed);
+  fighter.attackAnimFrame = 0;
+  fighter._hitRegistered = false;
+}
+
+function handleAI() {
+  if (p2.state === 'ko' || p2.hitTimer > 0 || roundStartTimer > 0) return;
+  
+  const dist = Math.abs(p1.x - p2.x);
+  const charData = CHARS[p2.char];
+  const aiSpeed = charData.speed * 0.4;
+  
+  // AI decision making
+  if (p2.attackTimer <= 0) {
+    if (dist > 120) {
+      // Move toward player
+      p2.vx = p1.x < p2.x ? -aiSpeed : aiSpeed;
+      p2.state = 'walk';
+      // Occasional jump
+      if (Math.random() < 0.01 && p2.jumpY >= 0) {
+        p2.jumpY = -1;
+        p2.vy = -13;
+        p2.state = 'jump';
+      }
+    } else if (dist < 80) {
+      // In attack range
+      if (Math.random() < 0.1) {
+        // Attack
+        const attacks = ['lowpunch', 'highpunch', 'lowkick', 'highkick'];
+        performAttack(p2, attacks[Math.floor(Math.random() * attacks.length)]);
+      } else if (Math.random() < 0.02) {
+        // Block
+        p2.state = 'block';
+        p2.blockTimer = 20;
+      } else if (Math.random() < 0.03) {
+        // Retreat
+        p2.vx = p1.x < p2.x ? aiSpeed : -aiSpeed;
+      }
+      // AI crouching
+      p2.crouching = Math.random() < 0.02;
+    } else {
+      // Medium range - approach or wait
+      if (Math.random() < 0.04) {
+        p2.vx = p1.x < p2.x ? -aiSpeed * 0.5 : aiSpeed * 0.5;
+        p2.state = 'walk';
+      } else {
+        p2.state = 'idle';
+      }
+    }
+  }
+}
+
+function checkAttackCollision(attacker, defender) {
+  if (attacker.state !== 'attack') return;
+  if (attacker._hitRegistered) return;
+  
+  // Active hit frames: attack hits during the middle portion of the animation
+  // attackTimer counts DOWN from max to 0
+  const maxTimer = Math.max(14, 25 - CHARS[attacker.char].speed);
+  const elapsed = maxTimer - attacker.attackTimer;
+  // Hit window: from 20% to 60% of the attack duration
+  if (elapsed < maxTimer * 0.2 || elapsed > maxTimer * 0.6) return;
+  
+  const dist = Math.abs(attacker.x - defender.x);
+  const range = attacker.attackType.includes('kick') ? 80 : 65;
+  
+  // Vertical check - high attacks miss crouching, low attacks always hit
+  if (attacker.attackType.includes('high') && defender.crouching) return;
+  
+  if (dist < range) {
+    // Check if defender is blocking
+    if (defender.state === 'block') {
+      playSFX('block');
+      defender.blockTimer = 10;
+      attacker._hitRegistered = true;
+      addHitParticles((attacker.x + defender.x) / 2, attacker.y - 20, 3, '#4488ff');
+      return;
+    }
+    
+    // Calculate damage
+    let damage = CHARS[attacker.char].power;
+    if (attacker.attackType === 'highpunch') damage *= 1.3;
+    else if (attacker.attackType === 'highkick') damage *= 1.5;
+    else if (attacker.attackType === 'lowpunch') damage *= 0.8;
+    else damage *= 1.0; // lowkick
+    
+    // Jump attack bonus
+    if (attacker.jumpY < -5) damage *= 1.2;
+    
+    // Apply defense reduction
+    damage = Math.max(4, damage - CHARS[defender.char].defense * 0.2);
+    
+    defender.hp -= damage;
+    defender.state = 'hit';
+    defender.hitTimer = 14;
+    defender.vx = attacker.facing * (damage > 10 ? 6 : 3);
+    defender.comboCount = 0;
+    attacker.comboCount++;
+    attacker._hitRegistered = true;
+    
+    // Effects
+    const hitX = (attacker.x + defender.x) / 2;
+    const hitY = attacker.attackType.includes('high') ? attacker.y - 30 + (attacker.jumpY||0) : attacker.y + (attacker.jumpY||0);
+    addHitParticles(hitX, hitY, 8, '#ffcc00');
+    screenShake = 5 + damage * 0.3;
+    
+    if (damage > 10) playSFX('heavyhit');
+    else playSFX('hit');
+  }
+}
+
+function endRound() {
+  if (roundOver) return;
+  roundOver = true;
+  gameOverTimer = 0;
+  
+  if (p1.hp <= 0) { p2.wins++; playSFX('ko'); }
+  else if (p2.hp <= 0) { p1.wins++; playSFX('ko'); }
+  else if (p1.hp > p2.hp) { p1.wins++; }
+  else { p2.wins++; }
+}
+
+// ============================================================
+// FIGHT SCREEN DRAWING
+// ============================================================
+function drawFight() {
+  // Apply screen shake
+  ctx.save();
+  if (screenShake > 0.5) {
+    ctx.translate(
+      (Math.random() - 0.5) * screenShake,
+      (Math.random() - 0.5) * screenShake
+    );
+  }
+  
+  // Background
+  drawBackground();
+  
+  // Draw fighters
+  const p1DrawY = p1.y + p1.jumpY;
+  const p2DrawY = p2.y + p2.jumpY;
+  
+  // Shadow under fighters
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(p1.x, p1.y + 62, 25, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(p2.x, p2.y + 62, 25, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Draw P1
+  drawCharacterPortrait(ctx, p1.char, p1.x, p1DrawY, 1.3, {
+    facing: p1.facing,
+    state: p1.state,
+    attackType: p1.attackType,
+    animFrame: p1.state === 'attack' ? p1.attackAnimFrame : p1.animFrame,
+    breathe: Math.sin(frameCount * 0.05) * 1.5,
+    crouching: p1.crouching
+  });
+  
+  // Draw P2
+  drawCharacterPortrait(ctx, p2.char, p2.x, p2DrawY, 1.3, {
+    facing: p2.facing,
+    state: p2.state,
+    attackType: p2.attackType,
+    animFrame: p2.state === 'attack' ? p2.attackAnimFrame : p2.animFrame,
+    breathe: Math.sin(frameCount * 0.05 + 1) * 1.5,
+    crouching: p2.crouching
+  });
+  
+  // Particles
+  drawParticles();
+  
+  ctx.restore();
+  
+  // HUD (not affected by screen shake)
+  drawHealthBars();
+  
+  // Round start announcement
+  if (roundStartTimer > 0) {
+    ctx.font = 'bold 48px monospace';
+    ctx.textAlign = 'center';
+    if (roundStartTimer > 60) {
+      ctx.fillStyle = '#ffcc00';
+      ctx.fillText('ROUND ' + roundNum, 480, 280);
+    } else {
+      ctx.fillStyle = '#ff3333';
+      ctx.fillText('FIGHT!', 480, 280);
+    }
+    ctx.textAlign = 'left';
+  }
+  
+  // Round end announcement
+  if (roundOver) {
+    ctx.font = 'bold 42px monospace';
+    ctx.textAlign = 'center';
+    if (p1.hp <= 0 || p2.hp <= 0) {
+      ctx.fillStyle = '#ff0000';
+      ctx.fillText('K.O.!', 480, 250);
+    }
+    if (gameOverTimer > 60) {
+      ctx.fillStyle = '#ffcc00';
+      const roundWinner = p1.hp > p2.hp ? CHARS[p1.char].name : CHARS[p2.char].name;
+      ctx.font = 'bold 28px monospace';
+      ctx.fillText(roundWinner + ' WINS', 480, 300);
+    }
+    ctx.textAlign = 'left';
+  }
+  
+  // Controls hint
+  ctx.font = '10px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillText('Arrows: Move/Jump/Crouch | A:LowKick S:HighKick D:LowPunch F:HighPunch', 180, 535);
+}
+
+// ============================================================
+// GAME OVER SCREEN
+// ============================================================
+function drawGameOver() {
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Winner display
+  const winChar = winner === 'P1' ? p1.char : p2.char;
+  
+  // Background glow
+  ctx.fillStyle = 'rgba(255,200,0,0.05)';
+  ctx.beginPath();
+  ctx.ellipse(480, 300, 200, 200, 0, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Draw winner character large
+  drawCharacterPortrait(ctx, winChar, 480, 350, 2.5, {
+    facing: 1,
+    state: 'idle',
+    animFrame: frameCount,
+    breathe: Math.sin(frameCount * 0.04) * 2
+  });
+  
+  // Winner text
+  ctx.font = 'bold 42px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffcc00';
+  ctx.fillText(CHARS[winChar].name, 480, 80);
+  
+  ctx.font = 'bold 32px monospace';
+  ctx.fillStyle = '#ff3333';
+  ctx.fillText('WINS!', 480, 120);
+  
+  // Flashing restart text
+  if (Math.floor(frameCount / 30) % 2 === 0) {
+    ctx.font = '16px monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('PRESS ENTER TO PLAY AGAIN', 480, 510);
+  }
+  
+  ctx.textAlign = 'left';
+  
+  // Handle restart
+  if (keys['Enter'] || keys[' ']) {
+    gameState = STATE.SELECT;
+    selectConfirmed = false;
+    p1.wins = 0;
+    p2.wins = 0;
+    roundNum = 1;
+    startMusic('select');
+    keys['Enter'] = false;
+    keys[' '] = false;
+  }
+}
+
+// ============================================================
+// MAIN GAME LOOP
+// ============================================================
+function gameLoop() {
+  frameCount++;
+  
+  switch (gameState) {
+    case STATE.INTRO:
+      updateIntro();
+      drawIntro();
+      break;
+    case STATE.SELECT:
+      updateSelect();
+      drawSelect();
+      break;
+    case STATE.FIGHT:
+      updateFight();
+      updateFight();
+      drawFight();
+      break;
+    case STATE.GAMEOVER:
+      drawGameOver();
+      break;
+  }
+  
+  requestAnimationFrame(gameLoop);
+}
+
+// Start intro music after first interaction
+let introMusicStarted = false;
+document.addEventListener('click', () => {
+  initAudio();
+  if (!introMusicStarted && gameState === STATE.INTRO) {
+    startMusic('intro');
+    introMusicStarted = true;
+  }
+});
+document.addEventListener('keydown', () => {
+  if (!introMusicStarted && gameState === STATE.INTRO) {
+    startMusic('intro');
+    introMusicStarted = true;
+  }
+}, { once: false });
+
+// Start the game
+gameLoop();
+</script>
+</body>
+</html>
