@@ -4,6 +4,8 @@ A 2D arcade-style fighting game featuring anthropomorphic animal characters batt
 
 *Designed and built by my daughter. This game is dedicated to her.*
 
+![Animal Fighters](Wallpaper.png)
+
 ---
 
 ## Characters
