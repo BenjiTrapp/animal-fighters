@@ -2563,12 +2563,12 @@ function handlePlayerInput() {
     if (keys['a']) { performAttack(p1, 'lowkick'); keys['a'] = false; }
     else if (keys['s']) { performAttack(p1, 'highkick'); keys['s'] = false; }
     else if (keys['d']) {
-      if (p1.char === 0) { performAttack(p1, 'judothrow'); }
+      if (p1.char === 0 && Math.abs(p1.x - p2.x) < 90) { performAttack(p1, 'judothrow'); }
       else { performAttack(p1, 'lowpunch'); }
       keys['d'] = false;
     }
     else if (keys['f']) {
-      if (p1.char === 0) { performAttack(p1, 'shoulderslam'); }
+      if (p1.char === 0 && Math.abs(p1.x - p2.x) < 90) { performAttack(p1, 'shoulderslam'); }
       else { performAttack(p1, 'highpunch'); }
       keys['f'] = false;
     }
