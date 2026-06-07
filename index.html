@@ -40,8 +40,8 @@ const CHARS = [
 ];
 
 // Player/Game state
-let p1 = { char: 0, x: 200, y: 380, hp: 100, maxHp: 100, vx: 0, vy: 0, facing: 1, state: 'idle', attackType: '', attackTimer: 0, attackAnimFrame: 0, hitTimer: 0, blockTimer: 0, wins: 0, animFrame: 0, jumpY: 0, crouching: false, comboCount: 0, _hitRegistered: false };
-let p2 = { char: 1, x: 700, y: 380, hp: 100, maxHp: 100, vx: 0, vy: 0, facing: -1, state: 'idle', attackType: '', attackTimer: 0, attackAnimFrame: 0, hitTimer: 0, blockTimer: 0, wins: 0, animFrame: 0, jumpY: 0, crouching: false, comboCount: 0, _hitRegistered: false };
+let p1 = { char: 0, x: 200, y: 380, hp: 100, maxHp: 100, vx: 0, vy: 0, facing: 1, state: 'idle', attackType: '', attackTimer: 0, attackAnimFrame: 0, hitTimer: 0, blockTimer: 0, wins: 0, animFrame: 0, jumpY: 0, crouching: false, comboCount: 0, _hitRegistered: false, thrown: false, thrownTimer: 0 };
+let p2 = { char: 1, x: 700, y: 380, hp: 100, maxHp: 100, vx: 0, vy: 0, facing: -1, state: 'idle', attackType: '', attackTimer: 0, attackAnimFrame: 0, hitTimer: 0, blockTimer: 0, wins: 0, animFrame: 0, jumpY: 0, crouching: false, comboCount: 0, _hitRegistered: false, thrown: false, thrownTimer: 0 };
 
 let selectCursor = 0;
 let selectConfirmed = false;
@@ -59,8 +59,8 @@ let frameCount = 0;
 
 // Keys
 const keys = {};
-document.addEventListener('keydown', e => { keys[e.key] = true; if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault(); if (gameState === STATE.INTRO && introPhase < 3) introPhase = 3; initAudio(); });
-document.addEventListener('keyup', e => { keys[e.key] = false; });
+document.addEventListener('keydown', e => { keys[e.key] = true; if (e.key !== e.key.toLowerCase()) keys[e.key.toLowerCase()] = true; if (e.code) keys[e.code] = true; if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault(); if (gameState === STATE.INTRO && introPhase < 3) introPhase = 3; initAudio(); });
+document.addEventListener('keyup', e => { keys[e.key] = false; if (e.key !== e.key.toLowerCase()) keys[e.key.toLowerCase()] = false; if (e.code) keys[e.code] = false; });
 
 // ============================================================
 // MUSIC ENGINE - MK-Style Dark Aggressive Music
@@ -239,6 +239,13 @@ function playSFX(type) {
   } else if (type === 'ko') {
     for (let i = 0; i < 6; i++) playNote(200 + i * 50, 0.3, 'sawtooth', 0.12 - i*0.015, t + i*0.12);
     playDrum('kick', t); playDrum('snare', t+0.2); playDrum('kick', t+0.4);
+  } else if (type === 'slam') {
+    // Ground slam impact sound
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(30, t+0.3);
+    g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t+0.35);
+    o.connect(g); g.connect(masterGain); o.start(t); o.stop(t+0.35);
+    playDrum('kick', t); playDrum('kick', t+0.05); playDrum('snare', t+0.1);
   } else if (type === 'round') {
     playNote(392, 0.15, 'square', 0.12, t); playNote(523, 0.2, 'square', 0.12, t+0.15);
   } else if (type === 'block') {
@@ -294,12 +301,51 @@ function drawCharacterPortrait(ctx, charIdx, x, y, scale, options) {
       legRAngle = 0.5 - Math.min(1, animFrame * 0.12) * 2.5;
       bodyOffY -= 5;
       armLAngle = -0.5;
+    } else if (attackType === 'judothrow') {
+      // Judo throw: crouch, reach forward with both arms, then lift
+      const f = Math.min(1, animFrame * 0.08);
+      if (f < 0.4) {
+        // Reach forward (grab phase)
+        armLAngle = -0.3 - f * 3;
+        armRAngle = -0.3 - f * 3;
+        bodyOffY += 8;
+        legLAngle = 0.4;
+        legRAngle = 0.4;
+      } else {
+        // Lift and flip (throw phase)
+        const t = (f - 0.4) / 0.6;
+        armLAngle = -1.5 + t * 3.5;
+        armRAngle = -1.5 + t * 3.5;
+        bodyOffY -= t * 12;
+        headTilt = -0.2;
+        legLAngle = -0.3 * t;
+        legRAngle = 0.2;
+      }
+    } else if (attackType === 'shoulderslam') {
+      // Shoulder slam: lean forward, drive with shoulder
+      const f = Math.min(1, animFrame * 0.1);
+      bodyOffY += 5 - f * 10;
+      headTilt = 0.3 - f * 0.4;
+      armLAngle = 0.8 - f * 1.5;
+      armRAngle = 0.8 - f * 1.5;
+      legLAngle = -0.5 * f;
+      legRAngle = 0.6 * (1 - f);
     }
   } else if (state === 'hit') {
-    bodyOffY += 3;
-    headTilt = 0.15;
-    armLAngle = 0.3;
-    armRAngle = 0.5;
+    if (opt.thrown) {
+      // Spinning in the air from judo throw
+      const spin = opt.thrownTimer * 0.35;
+      ctx.rotate(spin);
+      armLAngle = -0.8;
+      armRAngle = 0.8;
+      legLAngle = -0.5;
+      legRAngle = 0.5;
+    } else {
+      bodyOffY += 3;
+      headTilt = 0.15;
+      armLAngle = 0.3;
+      armRAngle = 0.5;
+    }
   } else if (state === 'block') {
     armLAngle = -0.8;
     armRAngle = -0.6;
@@ -309,6 +355,23 @@ function drawCharacterPortrait(ctx, charIdx, x, y, scale, options) {
     armRAngle = -0.7;
     legLAngle = -0.3;
     legRAngle = 0.3;
+  } else if (state === 'knockdown') {
+    // Lying flat on the ground
+    ctx.rotate(Math.PI / 2);
+    bodyOffY += 35;
+    armLAngle = 0.3;
+    armRAngle = 0.3;
+    legLAngle = 0.1;
+    legRAngle = 0.1;
+  } else if (state === 'getup') {
+    // Getting up from ground
+    const t = 1 - (opt.getupTimer || 0) / 20;
+    ctx.rotate((Math.PI / 2) * (1 - t));
+    bodyOffY += 35 * (1 - t);
+    armLAngle = -0.5 * t;
+    armRAngle = -0.5 * t;
+    legLAngle = 0.4 * (1 - t);
+    legRAngle = 0.4 * (1 - t);
   } else if (state === 'ko') {
     ctx.rotate(Math.PI / 2 * Math.min(1, animFrame * 0.05));
     bodyOffY += animFrame * 0.5;
@@ -2397,16 +2460,50 @@ function updateFight() {
 function updateFighter(f) {
   // Gravity for jumps
   if (f.jumpY < 0) {
-    f.vy += 0.8;
+    f.vy += 1.0;
     f.jumpY += f.vy;
+    if (f.thrown) f.thrownTimer++;
     if (f.jumpY >= 0) {
       f.jumpY = 0;
       f.vy = 0;
       if (f.state === 'jump') f.state = 'idle';
-      // Don't override attack state on landing
-      if (f.state !== 'attack') addDustParticles(f.x, f.y + 60);
-      else addDustParticles(f.x, f.y + 60);
+      // Ground slam - enter knockdown when thrown
+      if (f.thrown) {
+        f.state = 'knockdown';
+        f.knockdownTimer = 35;
+        f.thrown = false;
+        f.thrownTimer = 0;
+        addDustParticles(f.x - 20, f.y + 60);
+        addDustParticles(f.x - 10, f.y + 60);
+        addDustParticles(f.x, f.y + 60);
+        addDustParticles(f.x + 10, f.y + 60);
+        addDustParticles(f.x + 20, f.y + 60);
+        screenShake = 14;
+        playSFX('slam');
+      } else {
+        addDustParticles(f.x, f.y + 60);
+      }
     }
+  }
+  
+  // Knockdown timer - lie on ground then get up
+  if (f.state === 'knockdown') {
+    f.knockdownTimer = (f.knockdownTimer || 0) - 1;
+    if (f.knockdownTimer <= 0) {
+      f.state = 'getup';
+      f.getupTimer = 20;
+    }
+    f.hitTimer = 0;
+    return;
+  }
+  
+  // Get up animation
+  if (f.state === 'getup') {
+    f.getupTimer = (f.getupTimer || 0) - 1;
+    if (f.getupTimer <= 0) {
+      f.state = 'idle';
+    }
+    return;
   }
   
   // Movement
@@ -2439,7 +2536,7 @@ function updateFighter(f) {
 }
 
 function handlePlayerInput() {
-  if (p1.state === 'ko' || p1.hitTimer > 0) return;
+  if (p1.state === 'ko' || p1.state === 'knockdown' || p1.state === 'getup' || p1.hitTimer > 0) return;
   
   const speed = CHARS[p1.char].speed * 0.5;
   let moving = false;
@@ -2465,8 +2562,16 @@ function handlePlayerInput() {
     // Attacks (allowed on ground and in air)
     if (keys['a']) { performAttack(p1, 'lowkick'); keys['a'] = false; }
     else if (keys['s']) { performAttack(p1, 'highkick'); keys['s'] = false; }
-    else if (keys['d']) { performAttack(p1, 'lowpunch'); keys['d'] = false; }
-    else if (keys['f']) { performAttack(p1, 'highpunch'); keys['f'] = false; }
+    else if (keys['d']) {
+      if (p1.char === 0) { performAttack(p1, 'judothrow'); }
+      else { performAttack(p1, 'lowpunch'); }
+      keys['d'] = false;
+    }
+    else if (keys['f']) {
+      if (p1.char === 0) { performAttack(p1, 'shoulderslam'); }
+      else { performAttack(p1, 'highpunch'); }
+      keys['f'] = false;
+    }
     else if (keys[' '] && p1.state !== 'jump') {
       p1.state = 'block';
       p1.blockTimer = 20;
@@ -2481,13 +2586,23 @@ function performAttack(fighter, type) {
   fighter.state = 'attack';
   fighter.attackType = type;
   const charSpeed = CHARS[fighter.char].speed;
-  fighter.attackTimer = Math.max(14, 25 - charSpeed);
+  if (type === 'judothrow') {
+    fighter.attackTimer = 22;
+    fighter.vx = fighter.facing * 5;
+    playSFX('heavyhit');
+  } else if (type === 'shoulderslam') {
+    fighter.attackTimer = 28;
+    fighter.vx = fighter.facing * 8;
+    playSFX('heavyhit');
+  } else {
+    fighter.attackTimer = Math.max(14, 25 - charSpeed);
+  }
   fighter.attackAnimFrame = 0;
   fighter._hitRegistered = false;
 }
 
 function handleAI() {
-  if (p2.state === 'ko' || p2.hitTimer > 0 || roundStartTimer > 0) return;
+  if (p2.state === 'ko' || p2.state === 'knockdown' || p2.state === 'getup' || p2.hitTimer > 0 || roundStartTimer > 0) return;
   
   const dist = Math.abs(p1.x - p2.x);
   const charData = CHARS[p2.char];
@@ -2539,20 +2654,27 @@ function checkAttackCollision(attacker, defender) {
   
   // Active hit frames: attack hits during the middle portion of the animation
   // attackTimer counts DOWN from max to 0
-  const maxTimer = Math.max(14, 25 - CHARS[attacker.char].speed);
+  let maxTimer;
+  if (attacker.attackType === 'judothrow') maxTimer = 22;
+  else if (attacker.attackType === 'shoulderslam') maxTimer = 28;
+  else maxTimer = Math.max(14, 25 - CHARS[attacker.char].speed);
   const elapsed = maxTimer - attacker.attackTimer;
   // Hit window: from 20% to 60% of the attack duration
   if (elapsed < maxTimer * 0.2 || elapsed > maxTimer * 0.6) return;
   
   const dist = Math.abs(attacker.x - defender.x);
-  const range = attacker.attackType.includes('kick') ? 80 : 65;
+  const isSpecial = attacker.attackType === 'judothrow' || attacker.attackType === 'shoulderslam';
+  let range;
+  if (attacker.attackType === 'judothrow') range = 55;
+  else if (attacker.attackType === 'shoulderslam') range = 75;
+  else range = attacker.attackType.includes('kick') ? 80 : 65;
   
-  // Vertical check - high attacks miss crouching, low attacks always hit
-  if (attacker.attackType.includes('high') && defender.crouching) return;
+  // Vertical check - high attacks miss crouching, low attacks always hit (specials always hit)
+  if (!isSpecial && attacker.attackType.includes('high') && defender.crouching) return;
   
   if (dist < range) {
-    // Check if defender is blocking
-    if (defender.state === 'block') {
+    // Check if defender is blocking (judo throw is unblockable)
+    if (defender.state === 'block' && attacker.attackType !== 'judothrow') {
       playSFX('block');
       defender.blockTimer = 10;
       attacker._hitRegistered = true;
@@ -2565,6 +2687,8 @@ function checkAttackCollision(attacker, defender) {
     if (attacker.attackType === 'highpunch') damage *= 1.3;
     else if (attacker.attackType === 'highkick') damage *= 1.5;
     else if (attacker.attackType === 'lowpunch') damage *= 0.8;
+    else if (attacker.attackType === 'judothrow') damage *= 2.2;
+    else if (attacker.attackType === 'shoulderslam') damage *= 1.8;
     else damage *= 1.0; // lowkick
     
     // Jump attack bonus
@@ -2575,8 +2699,27 @@ function checkAttackCollision(attacker, defender) {
     
     defender.hp -= damage;
     defender.state = 'hit';
-    defender.hitTimer = 14;
-    defender.vx = attacker.facing * (damage > 10 ? 6 : 3);
+    defender.hitTimer = attacker.attackType === 'judothrow' ? 40 : attacker.attackType === 'shoulderslam' ? 30 : 14;
+    
+    // Special attacks throw opponent into the air
+    if (attacker.attackType === 'judothrow') {
+      // Real judo throw: opponent flies OVER the attacker (opposite direction)
+      defender.vx = -attacker.facing * 14;
+      defender.vy = -22;
+      defender.jumpY = -1;
+      defender.thrown = true;
+      defender.thrownTimer = 0;
+    } else if (attacker.attackType === 'shoulderslam') {
+      defender.vx = attacker.facing * 10;
+      defender.vy = -14;
+      defender.jumpY = -1;
+      defender.thrown = true;
+      defender.thrownTimer = 0;
+    } else {
+      const knockback = damage > 10 ? 6 : 3;
+      defender.vx = attacker.facing * knockback;
+    }
+    
     defender.comboCount = 0;
     attacker.comboCount++;
     attacker._hitRegistered = true;
@@ -2584,10 +2727,17 @@ function checkAttackCollision(attacker, defender) {
     // Effects
     const hitX = (attacker.x + defender.x) / 2;
     const hitY = attacker.attackType.includes('high') ? attacker.y - 30 + (attacker.jumpY||0) : attacker.y + (attacker.jumpY||0);
-    addHitParticles(hitX, hitY, 8, '#ffcc00');
-    screenShake = 5 + damage * 0.3;
+    if (attacker.attackType === 'judothrow' || attacker.attackType === 'shoulderslam') {
+      addHitParticles(hitX, hitY, 20, '#ff6600');
+      addHitParticles(hitX, hitY - 20, 12, '#ffcc00');
+      addHitParticles(hitX, hitY, 8, '#ffffff');
+      screenShake = 15;
+    } else {
+      addHitParticles(hitX, hitY, 8, '#ffcc00');
+      screenShake = 5 + damage * 0.3;
+    }
     
-    if (damage > 10) playSFX('heavyhit');
+    if (attacker.attackType === 'judothrow' || attacker.attackType === 'shoulderslam' || damage > 10) playSFX('heavyhit');
     else playSFX('hit');
   }
 }
@@ -2639,7 +2789,10 @@ function drawFight() {
     attackType: p1.attackType,
     animFrame: p1.state === 'attack' ? p1.attackAnimFrame : p1.animFrame,
     breathe: Math.sin(frameCount * 0.05) * 1.5,
-    crouching: p1.crouching
+    crouching: p1.crouching,
+    getupTimer: p1.getupTimer || 0,
+    thrown: p1.thrown,
+    thrownTimer: p1.thrownTimer || 0
   });
   
   // Draw P2
@@ -2649,7 +2802,10 @@ function drawFight() {
     attackType: p2.attackType,
     animFrame: p2.state === 'attack' ? p2.attackAnimFrame : p2.animFrame,
     breathe: Math.sin(frameCount * 0.05 + 1) * 1.5,
-    crouching: p2.crouching
+    crouching: p2.crouching,
+    getupTimer: p2.getupTimer || 0,
+    thrown: p2.thrown,
+    thrownTimer: p2.thrownTimer || 0
   });
   
   // Particles
@@ -2694,7 +2850,7 @@ function drawFight() {
   // Controls hint
   ctx.font = '10px monospace';
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.fillText('Arrows: Move/Jump/Crouch | A:LowKick S:HighKick D:LowPunch F:HighPunch', 180, 535);
+  ctx.fillText('Arrows:Move/Jump | A:LowKick S:HighKick D:Punch/Throw F:Punch/Slam | Space:Block', 120, 535);
 }
 
 // ============================================================
@@ -2757,6 +2913,7 @@ function drawGameOver() {
 // MAIN GAME LOOP
 // ============================================================
 function gameLoop() {
+  try {
   frameCount++;
   
   switch (gameState) {
@@ -2776,6 +2933,12 @@ function gameLoop() {
     case STATE.GAMEOVER:
       drawGameOver();
       break;
+  }
+  } catch(err) {
+    ctx.fillStyle = '#ff0000';
+    ctx.font = '16px monospace';
+    ctx.fillText('ERROR: ' + err.message, 10, 30);
+    ctx.fillText('at: ' + err.stack.split('\n')[1], 10, 50);
   }
   
   requestAnimationFrame(gameLoop);
