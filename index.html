@@ -2,15 +2,175 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Animal Fighters</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; flex-direction: column; }
 canvas { display: block; image-rendering: pixelated; }
+#game-container { position: relative; display: flex; flex-direction: column; align-items: center; }
+
+/* Touch Controls - hidden by default, shown only on touch devices */
+#touch-controls {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 180px;
+  pointer-events: none;
+  z-index: 1000;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.touch-visible #touch-controls { display: block; }
+.touch-visible canvas { max-height: calc(100vh - 185px); max-width: 100vw; object-fit: contain; width: auto; height: auto; }
+html.touch-visible body { justify-content: flex-start; padding-top: 5px; }
+
+#dpad {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  width: 140px;
+  height: 140px;
+  pointer-events: auto;
+}
+#dpad .dpad-btn {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  background: rgba(255,255,255,0.2);
+  border: 2px solid rgba(255,255,255,0.5);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: rgba(255,255,255,0.8);
+  pointer-events: auto;
+  touch-action: none;
+}
+#dpad .dpad-btn.active { background: rgba(255,255,255,0.5); border-color: #fff; }
+#dpad-up { left: 47px; top: 0; }
+#dpad-down { left: 47px; bottom: 0; }
+#dpad-left { left: 0; top: 47px; }
+#dpad-right { right: 0; top: 47px; }
+
+#action-buttons {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  width: 180px;
+  height: 140px;
+  pointer-events: auto;
+}
+#action-buttons .action-btn {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: bold;
+  font-family: monospace;
+  color: #fff;
+  pointer-events: auto;
+  touch-action: none;
+}
+#action-buttons .action-btn.active { transform: scale(0.9); filter: brightness(1.5); }
+#btn-lowkick { background: rgba(0,150,255,0.4); left: 0; bottom: 0; }
+#btn-highkick { background: rgba(0,200,100,0.4); left: 0; top: 0; }
+#btn-special1 { background: rgba(255,150,0,0.4); right: 0; bottom: 0; }
+#btn-special2 { background: rgba(255,50,50,0.4); right: 0; top: 0; }
+#btn-block {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(150,100,255,0.4);
+  border: 2px solid rgba(255,255,255,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: bold;
+  font-family: monospace;
+  color: #fff;
+  pointer-events: auto;
+  touch-action: none;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 25px;
+}
+#btn-block.active { transform: translateX(-50%) scale(0.9); filter: brightness(1.5); }
+
+/* Menu touch buttons */
+#menu-touch-btns {
+  display: none;
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  gap: 15px;
+  pointer-events: auto;
+  z-index: 1001;
+}
+.touch-visible #menu-touch-btns { display: flex; }
+.menu-btn {
+  width: 60px;
+  height: 60px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.15);
+  border: 2px solid rgba(255,255,255,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  font-family: monospace;
+  color: #fff;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.menu-btn.active { background: rgba(255,255,255,0.4); }
 </style>
 </head>
 <body>
+<div id="game-container">
 <canvas id="gc" width="960" height="540"></canvas>
+</div>
+
+<!-- Touch Controls (only visible on touch devices) -->
+<div id="touch-controls">
+  <div id="dpad">
+    <div class="dpad-btn" id="dpad-up" data-key="ArrowUp">&#9650;</div>
+    <div class="dpad-btn" id="dpad-down" data-key="ArrowDown">&#9660;</div>
+    <div class="dpad-btn" id="dpad-left" data-key="ArrowLeft">&#9664;</div>
+    <div class="dpad-btn" id="dpad-right" data-key="ArrowRight">&#9654;</div>
+  </div>
+  <div id="btn-block" data-key=" ">BLK</div>
+  <div id="action-buttons">
+    <div class="action-btn" id="btn-lowkick" data-key="a">KICK</div>
+    <div class="action-btn" id="btn-highkick" data-key="s">H.KCK</div>
+    <div class="action-btn" id="btn-special1" data-key="d">SP1</div>
+    <div class="action-btn" id="btn-special2" data-key="f">SP2</div>
+  </div>
+</div>
+
+<!-- Menu navigation buttons for touch (visible only in menu states) -->
+<div id="menu-touch-btns">
+  <div class="menu-btn" id="menu-left" data-key="ArrowLeft">&#9664;</div>
+  <div class="menu-btn" id="menu-up" data-key="ArrowUp">&#9650;</div>
+  <div class="menu-btn" id="menu-down" data-key="ArrowDown">&#9660;</div>
+  <div class="menu-btn" id="menu-right" data-key="ArrowRight">&#9654;</div>
+  <div class="menu-btn" id="menu-confirm" data-key="Enter">OK</div>
+  <div class="menu-btn" id="menu-back" data-key="Escape">ESC</div>
+</div>
 <script>// ============================================================
 // ANIMAL FIGHTERS
 // Complete Fighting Game with Detailed Character Sprites
@@ -85,6 +245,136 @@ let frameCount = 0;
 const keys = {};
 document.addEventListener('keydown', e => { keys[e.key] = true; if (e.key !== e.key.toLowerCase()) keys[e.key.toLowerCase()] = true; if (e.code) keys[e.code] = true; if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault(); if (gameState === STATE.INTRO && introPhase < 3) introPhase = 3; initAudio(); });
 document.addEventListener('keyup', e => { keys[e.key] = false; if (e.key !== e.key.toLowerCase()) keys[e.key.toLowerCase()] = false; if (e.code) keys[e.code] = false; });
+
+// ============================================================
+// MOUSE SUPPORT FOR MENUS (Desktop)
+// ============================================================
+let mouseX = -1, mouseY = -1;
+let mouseHovering = false;
+
+function getCanvasMousePos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const scaleY = H / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
+  };
+}
+
+// Character select: get card index from position
+function getCharCardAt(mx, my) {
+  for (let i = 0; i < 6; i++) {
+    const col = i % 3;
+    const row = Math.floor(i / 3);
+    const cx = 160 + col * 320;
+    const cy = 130 + row * 185;
+    if (mx >= cx - 80 && mx <= cx + 80 && my >= cy - 72 && my <= cy + 83) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+// Level select: get level index from position
+function getLevelAt(mx, my) {
+  for (let i = 0; i < LEVELS.length; i++) {
+    const lvl = LEVELS[i];
+    const dx = mx - lvl.mapX;
+    const dy = my - lvl.mapY;
+    if (dx * dx + dy * dy <= 22 * 22) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+canvas.addEventListener('mousemove', function(e) {
+  const pos = getCanvasMousePos(e);
+  mouseX = pos.x;
+  mouseY = pos.y;
+
+  // Update cursor style based on hoverable elements
+  let hovering = false;
+  if (gameState === STATE.SELECT && !selectConfirmed) {
+    hovering = getCharCardAt(mouseX, mouseY) >= 0;
+  } else if (gameState === STATE.LEVEL_SELECT && !levelConfirmed) {
+    hovering = getLevelAt(mouseX, mouseY) >= 0;
+  } else if (gameState === STATE.INTRO && introPhase >= 3) {
+    hovering = true;
+  } else if (gameState === STATE.GAMEOVER) {
+    hovering = true;
+  }
+  canvas.style.cursor = hovering ? 'pointer' : 'default';
+
+  // Hover: update cursor position in character select
+  if (gameState === STATE.SELECT && !selectConfirmed) {
+    const idx = getCharCardAt(mouseX, mouseY);
+    if (idx >= 0 && idx !== selectCursor) {
+      selectCursor = idx;
+      playSFX('select');
+    }
+  }
+  // Hover: update cursor in level select
+  if (gameState === STATE.LEVEL_SELECT && !levelConfirmed) {
+    const idx = getLevelAt(mouseX, mouseY);
+    if (idx >= 0 && idx !== levelCursor) {
+      levelCursor = idx;
+      playSFX('select');
+    }
+  }
+});
+
+canvas.addEventListener('click', function(e) {
+  const pos = getCanvasMousePos(e);
+  mouseX = pos.x;
+  mouseY = pos.y;
+  initAudio();
+
+  // Intro screen: click to start
+  if (gameState === STATE.INTRO) {
+    if (introPhase < 3) {
+      introPhase = 3;
+    } else {
+      keys['Enter'] = true;
+      setTimeout(() => { keys['Enter'] = false; }, 50);
+    }
+    return;
+  }
+
+  // Character select: click to confirm
+  if (gameState === STATE.SELECT && !selectConfirmed) {
+    const idx = getCharCardAt(mouseX, mouseY);
+    if (idx >= 0) {
+      selectCursor = idx;
+      keys['Enter'] = true;
+      setTimeout(() => { keys['Enter'] = false; }, 50);
+    }
+    return;
+  }
+
+  // Level select: click to confirm
+  if (gameState === STATE.LEVEL_SELECT && !levelConfirmed) {
+    const idx = getLevelAt(mouseX, mouseY);
+    if (idx >= 0) {
+      levelCursor = idx;
+      keys['Enter'] = true;
+      setTimeout(() => { keys['Enter'] = false; }, 50);
+    }
+    return;
+  }
+
+  // Game over: click to restart
+  if (gameState === STATE.GAMEOVER) {
+    keys['Enter'] = true;
+    setTimeout(() => { keys['Enter'] = false; }, 50);
+    return;
+  }
+});
+
+canvas.addEventListener('mouseleave', function() {
+  canvas.style.cursor = 'default';
+});
 
 // ============================================================
 // MUSIC ENGINE - MK-Style Dark Aggressive Music
@@ -5892,7 +6182,7 @@ function drawIntro() {
     ctx.shadowBlur = 12;
     ctx.shadowColor = '#00ffff';
     ctx.fillStyle = `rgba(0,255,255,${blinkAlpha})`;
-    ctx.fillText('PRESS ENTER TO START', 480, 500);
+    ctx.fillText('PRESS ENTER OR CLICK TO START', 480, 500);
     ctx.shadowBlur = 0;
     ctx.restore();
   }
@@ -6096,7 +6386,7 @@ function drawSelect() {
   if (!selectConfirmed) {
     ctx.font = '12px monospace';
     ctx.fillStyle = '#888';
-    ctx.fillText('< ARROWS to select | ENTER to confirm | ESC back >', 480, 495);
+    ctx.fillText('< ARROWS / MOUSE to select | ENTER / CLICK to confirm | ESC back >', 480, 495);
   }
   
   ctx.textAlign = 'left';
@@ -6300,7 +6590,7 @@ function drawLevelSelect() {
   if (!levelConfirmed) {
     ctx.font = '11px monospace';
     ctx.fillStyle = '#888';
-    ctx.fillText('< ARROWS to select | ENTER to confirm | ESC back >', 480, 535);
+    ctx.fillText('< ARROWS / MOUSE to select | ENTER / CLICK to confirm | ESC back >', 480, 535);
   }
   
   // Draw mini preview of the selected level background
@@ -7711,7 +8001,7 @@ function drawGameOver() {
   if (Math.floor(frameCount / 30) % 2 === 0) {
     ctx.font = '16px monospace';
     ctx.fillStyle = '#ffffff';
-    ctx.fillText('PRESS ENTER TO PLAY AGAIN', 480, 510);
+    ctx.fillText('PRESS ENTER OR CLICK TO PLAY AGAIN', 480, 510);
   }
   
   ctx.textAlign = 'left';
@@ -7783,6 +8073,166 @@ document.addEventListener('keydown', () => {
     introMusicStarted = true;
   }
 }, { once: false });
+
+// ============================================================
+// TOUCH / MOBILE CONTROLS
+// Only active on touch-capable devices, does not affect desktop
+// ============================================================
+(function() {
+  const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  if (!isTouchDevice) return; // Exit entirely on desktop - no impact
+
+  // Mark body for CSS
+  document.documentElement.classList.add('touch-visible');
+
+  // Responsive canvas scaling
+  function resizeCanvas() {
+    const container = document.getElementById('game-container');
+    const vw = window.innerWidth;
+    const vh = window.innerHeight - 185; // leave room for controls
+    const aspectRatio = 960 / 540;
+    let cw, ch;
+    if (vw / vh > aspectRatio) {
+      ch = vh;
+      cw = ch * aspectRatio;
+    } else {
+      cw = vw;
+      ch = cw / aspectRatio;
+    }
+    canvas.style.width = cw + 'px';
+    canvas.style.height = ch + 'px';
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // References to control containers
+  const touchControls = document.getElementById('touch-controls');
+  const menuBtns = document.getElementById('menu-touch-btns');
+
+  // Track which controls to show based on game state
+  let lastVisibleState = null;
+  function updateControlVisibility() {
+    const inFight = (gameState === STATE.FIGHT);
+    const inMenu = (gameState === STATE.SELECT || gameState === STATE.LEVEL_SELECT || gameState === STATE.GAMEOVER || gameState === STATE.INTRO);
+    
+    if (inFight) {
+      touchControls.style.display = 'block';
+      menuBtns.style.display = 'none';
+    } else if (inMenu) {
+      touchControls.style.display = 'none';
+      menuBtns.style.display = 'flex';
+    }
+  }
+
+  // Poll visibility changes periodically
+  setInterval(updateControlVisibility, 200);
+
+  // Active touches tracking
+  const activeTouches = new Map(); // touchId -> key
+
+  // Helper: simulate key press into the existing keys object
+  function pressKey(key) {
+    keys[key] = true;
+    if (key !== key.toLowerCase()) keys[key.toLowerCase()] = true;
+    // Also trigger intro skip and audio init
+    if (gameState === STATE.INTRO && introPhase < 3) introPhase = 3;
+    initAudio();
+    if (!introMusicStarted && gameState === STATE.INTRO) {
+      startMusic('intro');
+      introMusicStarted = true;
+    }
+  }
+
+  function releaseKey(key) {
+    keys[key] = false;
+    if (key !== key.toLowerCase()) keys[key.toLowerCase()] = false;
+  }
+
+  // ---- D-Pad & Action Buttons (Fight mode) ----
+  const allFightBtns = document.querySelectorAll('#dpad .dpad-btn, #action-buttons .action-btn, #btn-block');
+
+  allFightBtns.forEach(btn => {
+    btn.addEventListener('touchstart', function(e) {
+      e.preventDefault();
+      const key = this.dataset.key;
+      this.classList.add('active');
+      for (let touch of e.changedTouches) {
+        activeTouches.set(touch.identifier, { key, el: this });
+      }
+      pressKey(key);
+    }, { passive: false });
+
+    btn.addEventListener('touchend', function(e) {
+      e.preventDefault();
+      for (let touch of e.changedTouches) {
+        const info = activeTouches.get(touch.identifier);
+        if (info) {
+          info.el.classList.remove('active');
+          releaseKey(info.key);
+          activeTouches.delete(touch.identifier);
+        }
+      }
+    }, { passive: false });
+
+    btn.addEventListener('touchcancel', function(e) {
+      e.preventDefault();
+      for (let touch of e.changedTouches) {
+        const info = activeTouches.get(touch.identifier);
+        if (info) {
+          info.el.classList.remove('active');
+          releaseKey(info.key);
+          activeTouches.delete(touch.identifier);
+        }
+      }
+    }, { passive: false });
+  });
+
+  // ---- Menu Buttons ----
+  const allMenuBtns = document.querySelectorAll('#menu-touch-btns .menu-btn');
+
+  allMenuBtns.forEach(btn => {
+    btn.addEventListener('touchstart', function(e) {
+      e.preventDefault();
+      const key = this.dataset.key;
+      this.classList.add('active');
+      pressKey(key);
+      // For menu navigation, auto-release after a short delay (simulates tap)
+      setTimeout(() => {
+        this.classList.remove('active');
+        releaseKey(key);
+      }, 150);
+    }, { passive: false });
+
+    btn.addEventListener('touchend', function(e) {
+      e.preventDefault();
+    }, { passive: false });
+  });
+
+  // Prevent default touch behaviors on the canvas (scrolling, zooming)
+  canvas.addEventListener('touchstart', function(e) { 
+    e.preventDefault(); 
+    initAudio();
+    if (gameState === STATE.INTRO && introPhase < 3) introPhase = 3;
+    if (!introMusicStarted && gameState === STATE.INTRO) {
+      startMusic('intro');
+      introMusicStarted = true;
+    }
+  }, { passive: false });
+  canvas.addEventListener('touchmove', function(e) { e.preventDefault(); }, { passive: false });
+  canvas.addEventListener('touchend', function(e) { e.preventDefault(); }, { passive: false });
+
+  // Prevent double-tap zoom on the whole page
+  document.addEventListener('touchstart', function(e) {
+    if (e.touches.length > 1) e.preventDefault();
+  }, { passive: false });
+
+  let lastTap = 0;
+  document.addEventListener('touchend', function(e) {
+    const now = Date.now();
+    if (now - lastTap < 300) e.preventDefault();
+    lastTap = now;
+  }, { passive: false });
+})();
 
 // Start the game
 gameLoop();
