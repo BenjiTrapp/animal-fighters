@@ -8212,10 +8212,19 @@ document.addEventListener('keydown', () => {
   canvas.addEventListener('touchstart', function(e) { 
     e.preventDefault(); 
     initAudio();
-    if (gameState === STATE.INTRO && introPhase < 3) introPhase = 3;
-    if (!introMusicStarted && gameState === STATE.INTRO) {
-      startMusic('intro');
-      introMusicStarted = true;
+    if (gameState === STATE.INTRO) {
+      if (introPhase < 3) {
+        introPhase = 3;
+      }
+      // Tap on canvas advances past intro
+      keys['Enter'] = true;
+      if (!introMusicStarted) {
+        startMusic('intro');
+        introMusicStarted = true;
+      }
+    } else if (gameState === STATE.GAMEOVER) {
+      // Tap on canvas returns to character select
+      keys['Enter'] = true;
     }
   }, { passive: false });
   canvas.addEventListener('touchmove', function(e) { e.preventDefault(); }, { passive: false });
